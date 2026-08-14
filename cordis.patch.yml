@@ -1,0 +1,11 @@
+# dsh-plugin-workbench — profile patch layer
+#
+# Applied automatically at boot when this package is registered as a bundle
+# (dsh.profile.bundles, i.e. installed via `dsh plugin add`), or append this
+# block to the profile's own cordis.patch.yml when installing manually.
+#
+# NOTE: the layout patch (scripts/patch-layout.mjs) is NOT part of this layer;
+# it must still be run once against the installed dsh-client-ui-layout bundle.
+- insert:
+    - id: dsh-workbench
+      name: dsh-plugin-workbench

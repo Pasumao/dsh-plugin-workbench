@@ -61,7 +61,8 @@ DSH Web GUI 的 VS Code 风格工作区文件浏览器插件：在 sidebar 与�
 
 ```
 dsh-plugin-workbench/
-├─ package.json               # 包定义（main→host / exports["./client"]→client）
+├─ package.json               # 包定义（main→host / exports["./client"]→client / dsh.bundle）
+├─ cordis.patch.yml           # bundle 补丁层：loader 条目（boot 自动应用）
 ├─ tsdown.config.ts           # clientBundle 双面打包配置
 ├─ tsconfig.json              # typecheck 配置（strict）
 ├─ README.md                  # 本文档
@@ -114,42 +115,48 @@ pnpm run typecheck  # 可选（tsdown 本身不做类型检查）
 > **兼容性**：布局补丁针对 `dsh-client-ui-layout@0.1.0-rc.6` 的编译产物编写；
 > 其他 DSH 版本需先按新产物更新 `scripts/patch-layout.mjs` 里的锚点。
 
-**方式 A：从 npm 安装（使用者）**
+本包是一个标准 DSH bundle（`package.json` 声明 `dsh.bundle`，自带
+`cordis.patch.yml` 补丁层），推荐用 `dsh plugin` 命令安装：
 
-1. 把依赖挂进 web profile（`<DSH_HOME>` 默认 `~/.dsh`，可用 `DSH_HOME` 环境变量覆盖）：
+**方式 A：从 npm 安装（官方推荐）**
 
-   ```powershell
-   # <DSH_HOME>/profiles/web/package.json
-   # "dependencies": {
-   #   "dsh-plugin-workbench": "^0.0.1"
-   # }
-   cd <DSH_HOME>/profiles/web
-   pnpm install
-   ```
+```powershell
+dsh plugin --profile web add dsh-plugin-workbench
+```
 
-2. 在 `<DSH_HOME>/profiles/web/cordis.patch.yml` 追加 loader 条目：
+**方式 B：从 GitHub 安装**
 
-   ```yaml
-   - insert:
-       - id: dsh-workbench
-         name: 'dsh-plugin-workbench'
-   ```
+```powershell
+dsh plugin --profile web add github:Pasumao/dsh-plugin-workbench
+```
 
-3. 打布局补丁（补丁脚本随包分发，路径在已安装包内）：
+> git 安装会在安装时通过 `prepare` 脚本构建；pnpm 默认拦截构建脚本，
+> 按提示把包名加入 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 后重跑。
 
-   ```powershell
-   node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs
-   ```
+**方式 C：本地路径（开发调试）**
 
-   > pnpm 安装时包体在只读 store 中，备份目录可能无法写入；此时可省略备份
-   > （脚本仍会继续），或先 `pnpm approve-builds` / 改用 link 方式安装。
+```powershell
+dsh plugin --profile web add C:/path/to/dsh-plugin-workbench
+```
 
-4. 重启 dsh web。
+**手动安装（不用 `dsh plugin` 命令时）**
 
-**方式 B：本地开发（link: 依赖）**
+1. 在 `<DSH_HOME>/profiles/web/package.json` 的 dependencies 加入
+   `"dsh-plugin-workbench": "^0.0.1"`，然后 `cd <DSH_HOME>/profiles/web && pnpm install`
+2. 把本包根目录 `cordis.patch.yml` 的内容追加到 profile 的 `cordis.patch.yml`
+   （loader 条目）
 
-把第 1 步的依赖换成 `"dsh-plugin-workbench": "link:C:/path/to/dsh-plugin-workbench"`，
-其余步骤相同；补丁脚本路径为本仓库 `scripts/patch-layout.mjs`。
+**以上所有方式装完后，还需要打布局补丁**（bundle 层只注入 loader 条目，
+不会改写布局编译产物）：
+
+```powershell
+node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs
+```
+
+> pnpm 安装时包体在只读 store 中，备份目录可能无法写入；此时可省略备份
+> （脚本仍会继续），或改用 link 方式安装。
+
+最后重启 dsh web。
 
 ## 验证
 
@@ -171,8 +178,8 @@ Invoke-WebRequest http://127.0.0.1:3080/dsh-plugin-files/list -Method POST `
 
 ## 回滚
 
-1. 删除 `cordis.patch.yml` 中的 `dsh-workbench` insert，并从 profile
-   `package.json` 移除依赖后 `pnpm install`。
+1. `dsh plugin --profile web remove dsh-plugin-workbench`（手动安装时：从 profile
+   `package.json` 移除依赖并删除 profile `cordis.patch.yml` 中对应 insert）。
 2. 还原布局 bundle：把 `patches/layout.backup/client.js.orig` 覆盖回
    `@deepseek-ai\dsh-client-ui-layout\lib\client.js`（npx-cache 副本）。
 3. 重启 dsh web。
@@ -182,7 +189,8 @@ Invoke-WebRequest http://127.0.0.1:3080/dsh-plugin-files/list -Method POST `
 `npm`/`npx` 重装 `@deepseek-ai/dsh` 会覆盖布局 bundle，升级后重新执行
 `node scripts/patch-layout.mjs`。若脚本报 "anchor not found"，说明编译产物结构
 变了，需按新 bundle 更新 `scripts/patch-layout.mjs` 里的锚点。插件本身是
-`link:` 依赖，`pnpm run build` 重建即可。
+bundle 依赖，升级用 `dsh plugin --profile web update dsh-plugin-workbench`
+（本地 link 开发时 `pnpm run build` 重建即可）。
 
 ## 说明
 

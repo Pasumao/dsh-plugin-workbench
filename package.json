@@ -14,6 +14,9 @@
     "./package.json": "./package.json"
   },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "inject": [],
       "platform": "web"
@@ -22,7 +25,8 @@
   "scripts": {
     "build": "tsdown",
     "watch": "tsdown --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepare": "pnpm run build"
   },
   "license": "MIT",
   "author": "Pasumao <1830316810@qq.com>",
@@ -59,6 +63,7 @@
   "files": [
     "lib",
     "scripts",
+    "cordis.patch.yml",
     "src",
     "README.md",
     "CHANGELOG.md"
