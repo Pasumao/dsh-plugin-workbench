@@ -1,8 +1,7 @@
 {
-  "name": "@dsh-external/dsh-plugin-workbench",
+  "name": "dsh-plugin-workbench",
   "description": "VS Code-style workspace file explorer + editable preview for the dsh web GUI",
   "version": "0.0.1",
-  "private": true,
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "engines": {
@@ -58,9 +57,10 @@
     "typescript": "^5.6.0"
   },
   "files": [
-    "lib/index.js",
-    "lib/client.js",
+    "lib",
+    "scripts",
     "src",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ]
 }

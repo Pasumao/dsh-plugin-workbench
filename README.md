@@ -111,12 +111,17 @@ pnpm run typecheck  # 可选（tsdown 本身不做类型检查）
 
 ## 安装与启用
 
+> **兼容性**：布局补丁针对 `dsh-client-ui-layout@0.1.0-rc.6` 的编译产物编写；
+> 其他 DSH 版本需先按新产物更新 `scripts/patch-layout.mjs` 里的锚点。
+
+**方式 A：从 npm 安装（使用者）**
+
 1. 把依赖挂进 web profile（`<DSH_HOME>` 默认 `~/.dsh`，可用 `DSH_HOME` 环境变量覆盖）：
 
    ```powershell
    # <DSH_HOME>/profiles/web/package.json
    # "dependencies": {
-   #   "@dsh-external/dsh-plugin-workbench": "link:C:/path/to/dsh-plugin-workbench"
+   #   "dsh-plugin-workbench": "^0.0.1"
    # }
    cd <DSH_HOME>/profiles/web
    pnpm install
@@ -127,22 +132,30 @@ pnpm run typecheck  # 可选（tsdown 本身不做类型检查）
    ```yaml
    - insert:
        - id: dsh-workbench
-         name: '@dsh-external/dsh-plugin-workbench'
+         name: 'dsh-plugin-workbench'
    ```
 
-3. 打布局补丁（备份自动写入 `patches/layout.backup/`，可指定 `--target`）：
+3. 打布局补丁（补丁脚本随包分发，路径在已安装包内）：
 
    ```powershell
-   node scripts/patch-layout.mjs
+   node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs
    ```
 
+   > pnpm 安装时包体在只读 store 中，备份目录可能无法写入；此时可省略备份
+   > （脚本仍会继续），或先 `pnpm approve-builds` / 改用 link 方式安装。
+
 4. 重启 dsh web。
+
+**方式 B：本地开发（link: 依赖）**
+
+把第 1 步的依赖换成 `"dsh-plugin-workbench": "link:C:/path/to/dsh-plugin-workbench"`，
+其余步骤相同；补丁脚本路径为本仓库 `scripts/patch-layout.mjs`。
 
 ## 验证
 
 ```powershell
 # 插件 bundle 可访问（200）
-Invoke-WebRequest http://127.0.0.1:3080/plugins/@dsh-external/dsh-plugin-workbench/client.js
+Invoke-WebRequest http://127.0.0.1:3080/plugins/dsh-plugin-workbench/client.js
 # 布局 bundle 已打补丁（含 explorerCol / conversationSeat / renderSlot("explorer.preview")）
 Invoke-WebRequest http://127.0.0.1:3080/plugins/@deepseek-ai/dsh-client-ui-layout/client.js
 ```
