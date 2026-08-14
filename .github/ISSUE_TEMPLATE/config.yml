@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 讨论区（Discussions）
+    url: https://github.com/Pasumao/dsh-plugin-workbench/discussions
+    about: 提问、讨论用法与想法

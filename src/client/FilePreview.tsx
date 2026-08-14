@@ -42,7 +42,8 @@ function basenameOf(path: string): string {
   return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
 }
 
-function formatSize(bytes: number): string {
+function formatSize(bytes: number | undefined): string {
+  if (bytes === undefined) return ''
   if (!Number.isFinite(bytes) || bytes < 0) return ''
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`

@@ -1,5 +1,11 @@
 # dsh-plugin-workbench
 
+![License](https://img.shields.io/github/license/Pasumao/dsh-plugin-workbench)
+![CI](https://img.shields.io/github/actions/workflow/status/Pasumao/dsh-plugin-workbench/ci.yml?branch=main)
+![Node](https://img.shields.io/badge/node-%3E%3D18-339933)
+![Stars](https://img.shields.io/github/stars/Pasumao/dsh-plugin-workbench?style=social)
+![AI Assisted](https://img.shields.io/badge/AI-Assisted-8A2BE2)
+
 DSH Web GUI 的 VS Code 风格工作区文件浏览器插件：在 sidebar 与聊天区之间新增
 **文件树列**，点文件在中间区左侧打开**可编辑的代码预览**（语法高亮 + 标签页），
 文件树自动刷新，每个工作区各自保存自己的标签与展开状态。
@@ -57,8 +63,15 @@ DSH Web GUI 的 VS Code 风格工作区文件浏览器插件：在 sidebar 与�
 dsh-plugin-workbench/
 ├─ package.json               # 包定义（main→host / exports["./client"]→client）
 ├─ tsdown.config.ts           # clientBundle 双面打包配置
-├─ tsconfig.json              # 可选 typecheck 配置
+├─ tsconfig.json              # typecheck 配置（strict）
 ├─ README.md                  # 本文档
+├─ CONTRIBUTING.md            # 贡献指南
+├─ CODE_OF_CONDUCT.md         # 行为准则
+├─ SECURITY.md                # 安全政策
+├─ CHANGELOG.md               # 变更日志
+├─ .github/
+│  ├─ workflows/ci.yml        # CI：pnpm install + typecheck + build（Node 20/22）
+│  └─ ISSUE_TEMPLATE/         # Bug 报告 / 功能建议模板
 ├─ build/
 │  ├─ tsdown.client.ts        # 复用的 tsdown 预设（CSS Modules 内联 / banner / 纯净门）
 │  └─ web-platform.ts         # 平台模块表（外置 externals 清单）
@@ -76,6 +89,7 @@ dsh-plugin-workbench/
 │     ├─ highlight.ts         # highlight.js 语言集 + 扩展名识别
 │     ├─ store.ts             # 每工作区一份的标签/激活/收起状态
 │     ├─ locales.ts           # zh/en 文案
+│     ├─ css-modules.d.ts     # CSS Modules 类型声明（typecheck 用）
 │     └─ files.module.css     # VS Code 亮暗配色 + 编辑器 + 标签栏样式
 └─ lib/                       # 构建产物（不入库，`pnpm run build` 生成）
 ```
@@ -164,6 +178,20 @@ Invoke-WebRequest http://127.0.0.1:3080/dsh-plugin-files/list -Method POST `
 - 编辑保存为无条件写回；保存失败会在编辑区右下角提示，标签保持脏标记。
 - 明暗主题只作用于文件浏览器（`data-fe-theme`），不影响聊天区与皮肤。
 - 本仓库不包含 DSH 的任何编译产物；`patches/layout.backup/` 由补丁脚本按需生成。
+
+## 参与贡献
+
+欢迎提交 Issue 与 PR！请先阅读 [CONTRIBUTING](./CONTRIBUTING.md)（开发环境、
+提交检查清单、代码规范）与 [CODE_OF_CONDUCT](./CODE_OF_CONDUCT.md)。
+完整变更记录见 [CHANGELOG](./CHANGELOG.md)，安全相关事项见 [SECURITY](./SECURITY.md)。
+
+## AI 生成声明
+
+本项目的部分内容（包括部分源码、本文档与工程化配置）由 AI 辅助编码工具
+（DeepSeek Harness）生成。所有 AI 生成内容均经过人工审查、类型检查、编译验证
+与实机测试；涉及权限与文件系统的逻辑（`src/index.ts` 的 RPC 端点、
+`scripts/patch-layout.mjs`）已按最小权限原则人工复核。项目以 MIT 许可开源，
+欢迎任何人审计、修改与分发。
 
 ## License
 

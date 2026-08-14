@@ -4,6 +4,10 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.21.0",
+  "engines": {
+    "node": ">=18"
+  },
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
@@ -45,6 +49,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@types/node": "^26.2.0",
     "@types/react": "~18.3.1",
     "highlight.js": "^11.11.1",
     "lightningcss": "^1.32.0",
