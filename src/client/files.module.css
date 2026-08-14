@@ -1,0 +1,536 @@
+/* VS Code-style file browser chrome. Uses its own color variables (--fe-*)
+   instead of the app skin tokens, so the file column and preview keep a
+   consistent editor look in both light and dark themes, toggled via the
+   data-fe-theme attribute on the column/preview roots. */
+
+/* ---- VS Code color palettes (light / dark) ---- */
+:global([data-fe-theme='light']) {
+  --fe-bg: #ffffff;
+  --fe-sidebar-bg: #f3f3f3;
+  --fe-fg: #1f1f1f;
+  --fe-muted: #6e6e6e;
+  --fe-faint: #9d9d9d;
+  --fe-border: #e5e5e5;
+  --fe-border-strong: #c8c8c8;
+  --fe-accent: #005fb8;
+  --fe-hover: #e8e8e8;
+  --fe-selection: #add6ff;
+
+  --fe-token-keyword: #0000ff;
+  --fe-token-string: #a31515;
+  --fe-token-comment: #008000;
+  --fe-token-number: #098658;
+  --fe-token-function: #795e26;
+  --fe-token-type: #267f99;
+  --fe-token-variable: #001080;
+  --fe-token-tag: #800000;
+  --fe-token-meta: #6e6e6e;
+}
+
+:global([data-fe-theme='dark']) {
+  --fe-bg: #1e1e1e;
+  --fe-sidebar-bg: #252526;
+  --fe-fg: #d4d4d4;
+  --fe-muted: #cccccc;
+  --fe-faint: #9d9d9d;
+  --fe-border: #3c3c3c;
+  --fe-border-strong: #454545;
+  --fe-accent: #007acc;
+  --fe-hover: #2a2d2e;
+  --fe-selection: #264f78;
+
+  --fe-token-keyword: #569cd6;
+  --fe-token-string: #ce9178;
+  --fe-token-comment: #6a9955;
+  --fe-token-number: #b5cea8;
+  --fe-token-function: #dcdcaa;
+  --fe-token-type: #4ec9b0;
+  --fe-token-variable: #9cdcfe;
+  --fe-token-tag: #569cd6;
+  --fe-token-meta: #9b9b9b;
+}
+
+/* ---- Explorer column (file tree) ---- */
+.column {
+  box-sizing: border-box;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--fe-sidebar-bg);
+  font-size: 13px;
+  color: var(--fe-fg);
+}
+
+.header {
+  box-sizing: border-box;
+  flex: none;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--fe-border);
+}
+
+.headerTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fe-muted);
+}
+
+.headerActions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.action {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fe-muted);
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.action:hover:not(:disabled) {
+  background: var(--fe-hover);
+  color: var(--fe-fg);
+}
+
+.action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.treeArea {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  color: var(--fe-fg);
+  font-size: 13px;
+}
+
+.row:hover {
+  background: var(--fe-hover);
+}
+
+.rowSelected {
+  background: var(--fe-selection);
+}
+
+.rowSelected .name {
+  color: var(--fe-fg);
+}
+
+.chevron {
+  flex: none;
+  width: 12px;
+  text-align: center;
+  color: var(--fe-muted);
+  font-size: 10px;
+  line-height: 22px;
+}
+
+.icon {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.size {
+  flex: none;
+  color: var(--fe-faint);
+  font-size: 11px;
+}
+
+.actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.row:hover .actions,
+.row:focus-within .actions {
+  opacity: 1;
+}
+
+.rowHint {
+  color: var(--fe-faint);
+  font-size: 12px;
+  line-height: 20px;
+  padding: 2px 8px 2px 0;
+}
+
+.rowError {
+  color: #f48771;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 2px 8px 2px 0;
+}
+
+/* ---- Split preview + tabs ---- */
+.preview {
+  flex: 0 0 55%;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--fe-border);
+  background: var(--fe-bg);
+  animation: fe-preview-in 0.18s ease;
+}
+
+.previewClosing {
+  animation: fe-preview-out 0.2s ease forwards;
+}
+
+@keyframes fe-preview-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fe-preview-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.handle {
+  flex: none;
+  width: 6px;
+  margin-left: -4px;
+  margin-right: -2px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  z-index: 2;
+}
+
+.handle:hover,
+.handle:active {
+  background: var(--fe-accent);
+  opacity: 0.35;
+}
+
+.tabBar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  height: 34px;
+  border-bottom: 1px solid var(--fe-border);
+  background: var(--fe-sidebar-bg);
+}
+
+.tabScroller {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.collapse {
+  flex: none;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fe-muted);
+  width: 26px;
+  height: 26px;
+  margin: auto 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.collapse:hover {
+  background: var(--fe-hover);
+  color: var(--fe-fg);
+}
+
+.tab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 12px;
+  max-width: 180px;
+  font-size: 13px;
+  color: var(--fe-muted);
+  border-right: 1px solid var(--fe-border);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  background: var(--fe-hover);
+}
+
+.tabActive {
+  background: var(--fe-bg);
+  color: var(--fe-fg);
+  box-shadow: inset 0 -1px 0 var(--fe-accent);
+}
+
+.tabName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabClose {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fe-faint);
+  cursor: pointer;
+  font-size: 11px;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.tabClose:hover {
+  background: var(--fe-hover);
+  color: var(--fe-fg);
+}
+
+.tabDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fe-fg);
+  opacity: 0.85;
+}
+
+.previewBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Directly-editable editor: a transparent textarea over a highlighted layer. */
+.editor {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+}
+
+.editorHighlight {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 12px;
+  overflow: hidden;
+  pointer-events: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre;
+  color: var(--fe-fg);
+  background: transparent;
+}
+
+.editorHighlight code {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: inherit;
+}
+
+.editorTextarea {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 12px;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--fe-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+  tab-size: 2;
+}
+
+.saveError {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: #f48771;
+  color: #1e1e1e;
+  font-size: 12px;
+}
+
+.previewHint {
+  padding: 12px;
+  color: var(--fe-faint);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.previewMeta {
+  color: var(--fe-faint);
+  font-size: 11px;
+}
+
+.placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  text-align: center;
+  color: var(--fe-faint);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* ---- Syntax highlighting (highlight.js token classes) ---- */
+.editorHighlight :global(.hljs-keyword),
+.editorHighlight :global(.hljs-selector-tag),
+.editorHighlight :global(.hljs-literal) {
+  color: var(--fe-token-keyword);
+}
+
+.editorHighlight :global(.hljs-string),
+.editorHighlight :global(.hljs-regexp),
+.editorHighlight :global(.hljs-addition) {
+  color: var(--fe-token-string);
+}
+
+.editorHighlight :global(.hljs-comment),
+.editorHighlight :global(.hljs-quote) {
+  color: var(--fe-token-comment);
+  font-style: italic;
+}
+
+.editorHighlight :global(.hljs-number),
+.editorHighlight :global(.hljs-symbol),
+.editorHighlight :global(.hljs-bullet) {
+  color: var(--fe-token-number);
+}
+
+.editorHighlight :global(.hljs-title),
+.editorHighlight :global(.hljs-section),
+.editorHighlight :global(.hljs-title.function_) {
+  color: var(--fe-token-function);
+}
+
+.editorHighlight :global(.hljs-type),
+.editorHighlight :global(.hljs-built_in),
+.editorHighlight :global(.hljs-class .hljs-title) {
+  color: var(--fe-token-type);
+}
+
+.editorHighlight :global(.hljs-attr),
+.editorHighlight :global(.hljs-attribute),
+.editorHighlight :global(.hljs-variable),
+.editorHighlight :global(.hljs-template-variable),
+.editorHighlight :global(.hljs-params) {
+  color: var(--fe-token-variable);
+}
+
+.editorHighlight :global(.hljs-tag),
+.editorHighlight :global(.hljs-name) {
+  color: var(--fe-token-tag);
+}
+
+.editorHighlight :global(.hljs-meta) {
+  color: var(--fe-token-meta);
+}
+
+.editorHighlight :global(.hljs-emphasis) {
+  font-style: italic;
+}
+
+.editorHighlight :global(.hljs-strong) {
+  font-weight: bold;
+}
+
+/* ---- Skin chrome fix ----
+   Shift the maid-atelier fixed top/bottom trim past the explorer column and
+   the split preview, so it only decorates the chat instead of overlaying the
+   file column, preview header/buttons, or file content. */
+body[data-dsh-maid-atelier] [data-skin-chrome=top-trim] {
+  translate: calc(var(--maid-sidebar-width, 0px) + var(--dsh-explorer-width, 0px) + var(--dsh-preview-width, 0px)) 0 !important;
+}
+
+body[data-dsh-maid-atelier] [data-skin-chrome=bottom-trim] {
+  translate: calc(var(--maid-sidebar-width, 0px) + var(--dsh-explorer-width, 0px) + var(--dsh-preview-width, 0px)) 0 !important;
+}
+
+[class*='explorerCol'] {
+  border-right: 1px solid var(--fe-border) !important;
+}
