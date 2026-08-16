@@ -20,6 +20,8 @@ export interface TabsStateView {
   tabs: string[]
   active: string | undefined
   collapsed: boolean
+  /** Display-only soft wrap for the editor (never touches the file content). */
+  wrap: boolean
   theme: FeTheme
   cwd: string | undefined
 }
@@ -27,14 +29,29 @@ export interface TabsStateView {
 const EMPTY_TABS: string[] = []
 const EMPTY_WORKSPACE: PerWorkspace = { tabs: EMPTY_TABS, active: undefined, collapsed: false }
 
+const WRAP_KEY = 'dsh-plugin-workbench:wrap'
+
+/** Read the persisted wrap preference; defaults to soft wrap ON. */
+function storedWrap(): boolean {
+  try {
+    if (typeof window === 'undefined') return true
+    const stored = window.localStorage.getItem(WRAP_KEY)
+    return stored === null ? true : stored === '1'
+  } catch {
+    return true
+  }
+}
+
 interface StoreState {
   currentCwd: string | undefined
   workspaces: Record<string, PerWorkspace>
   theme: FeTheme
+  wrap: boolean
 }
 
-let state: StoreState = { currentCwd: undefined, workspaces: {}, theme: 'dark' }
-let view: TabsStateView = { tabs: EMPTY_TABS, active: undefined, collapsed: false, theme: 'dark', cwd: undefined }
+const initialWrap = storedWrap()
+let state: StoreState = { currentCwd: undefined, workspaces: {}, theme: 'dark', wrap: initialWrap }
+let view: TabsStateView = { tabs: EMPTY_TABS, active: undefined, collapsed: false, wrap: initialWrap, theme: 'dark', cwd: undefined }
 const listeners = new Set<() => void>()
 
 function workspaceOf(cwd: string | undefined): PerWorkspace {
@@ -63,6 +80,7 @@ function commit(next: StoreState): void {
     tabs: ws.tabs,
     active: ws.active,
     collapsed: ws.collapsed,
+    wrap: state.wrap,
     theme: state.theme,
     cwd: state.currentCwd,
   }
@@ -70,6 +88,7 @@ function commit(next: StoreState): void {
     nextView.tabs === view.tabs
     && nextView.active === view.active
     && nextView.collapsed === view.collapsed
+    && nextView.wrap === view.wrap
     && nextView.theme === view.theme
     && nextView.cwd === view.cwd
   ) return
@@ -148,4 +167,15 @@ export function expandPreview(): void {
 /** Toggle the file-browser light/dark theme (applies to every workspace). */
 export function toggleTheme(): void {
   commit({ ...state, theme: state.theme === 'dark' ? 'light' : 'dark' })
+}
+
+/** Toggle display-only soft wrap for the editor (global, persisted). */
+export function toggleWrap(): void {
+  const wrap = !state.wrap
+  try {
+    window.localStorage.setItem(WRAP_KEY, wrap ? '1' : '0')
+  } catch {
+    // storage unavailable — the preference just won't persist across reloads
+  }
+  commit({ ...state, wrap })
 }

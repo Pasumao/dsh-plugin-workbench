@@ -170,6 +170,30 @@
   line-height: 22px;
 }
 
+/* Colored extension badge (VS Code "Minimal"-style file icon). */
+.fileBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 15px;
+  border-radius: 3px;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.3px;
+  padding: 0 1px;
+  box-sizing: border-box;
+  vertical-align: middle;
+  user-select: none;
+}
+
+/* Four-character labels (HTML/JAVA/SCSS/LESS/TOML/…) need a smaller size. */
+.fileBadgeLong {
+  font-size: 6.5px;
+  letter-spacing: -0.4px;
+}
+
 .name {
   flex: 1;
   min-width: 0;
@@ -281,7 +305,8 @@
   scrollbar-width: thin;
 }
 
-.collapse {
+.collapse,
+.tabAction {
   flex: none;
   appearance: none;
   border: none;
@@ -300,9 +325,16 @@
   padding: 0;
 }
 
-.collapse:hover {
+.collapse:hover,
+.tabAction:hover {
   background: var(--fe-hover);
   color: var(--fe-fg);
+}
+
+/* Wrap toggle active state: soft wrap is on. */
+.tabActionActive {
+  background: var(--fe-hover);
+  color: var(--fe-accent);
 }
 
 .tab {
@@ -335,6 +367,16 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.tabIcon {
+  flex: none;
+  width: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
 }
 
 .tabClose {
@@ -385,12 +427,16 @@
   inset: 0;
   margin: 0;
   padding: 12px;
-  overflow: hidden;
+  /* auto (not hidden): the highlight layer gets the same scrollbar gutter as
+     the textarea, so both content boxes have identical widths and wrap at the
+     same points. Its scrollbars stack invisibly beneath the textarea's. */
+  overflow: auto;
   pointer-events: none;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
   line-height: 1.5;
   white-space: pre;
+  tab-size: 2;
   color: var(--fe-fg);
   background: transparent;
 }
@@ -420,6 +466,18 @@
   white-space: pre;
   overflow: auto;
   tab-size: 2;
+}
+
+/* Display-only soft wrap: both layers wrap identically; the file content
+   itself is never modified (wrap="soft" on the textarea). */
+.editor[data-wrap='on'] .editorHighlight,
+.editor[data-wrap='on'] .editorTextarea {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.editor[data-wrap='on'] .editorTextarea {
+  overflow-x: hidden;
 }
 
 .saveError {

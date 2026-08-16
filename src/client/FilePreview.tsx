@@ -8,8 +8,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import styles from './files.module.css'
 import { highlightCode } from './highlight'
+import { FileIcon } from './fileIcons'
 import type { FilesKey } from './locales'
-import { activateFile, closeFile, collapsePreview, moveTab, useTabsState } from './store'
+import { activateFile, closeFile, collapsePreview, moveTab, toggleWrap, useTabsState } from './store'
 import type { FsReadResult } from './FileExplorer'
 
 interface TabData {
@@ -62,7 +63,7 @@ function previewDataOf(result: FsReadResult): TabData {
 }
 
 export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
-  const { tabs, active, theme, collapsed } = useTabsState()
+  const { tabs, active, theme, collapsed, wrap } = useTabsState()
 
   const [previewWidth, setPreviewWidth] = useState<number | null>(null)
   const [closing, setClosing] = useState(false)
@@ -247,7 +248,7 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
       case 'loaded': {
         const highlighted = active !== undefined ? highlightCode(activeData.draft ?? '', active) : ''
         return (
-          <div className={styles.editor}>
+          <div className={styles.editor} data-wrap={wrap ? 'on' : 'off'}>
             <pre ref={highlightRef} className={styles.editorHighlight} aria-hidden="true">
               <code dangerouslySetInnerHTML={{ __html: highlighted }} />
             </pre>
@@ -258,7 +259,7 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
               onScroll={onTextareaScroll}
               onKeyDown={onKeyDown}
               spellCheck={false}
-              wrap="off"
+              wrap={wrap ? 'soft' : 'off'}
               title={t('action.saveHint')}
             />
             {saveError !== undefined && <div className={styles.saveError}>{saveError}</div>}
@@ -318,6 +319,7 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
                     onDragEnd={onTabDragEnd}
                     title={path}
                   >
+                    <span className={styles.tabIcon}><FileIcon name={basenameOf(path)} /></span>
                     <span className={styles.tabName}>{basenameOf(path)}</span>
                     {data?.dirty === true && <span className={styles.tabDot} />}
                     <button
@@ -335,6 +337,14 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
                 )
               })}
             </div>
+            <button
+              type="button"
+              className={`${styles.tabAction}${wrap ? ` ${styles.tabActionActive}` : ''}`}
+              title={wrap ? t('action.wrapOff') : t('action.wrapOn')}
+              onClick={toggleWrap}
+            >
+              {'⤶'}
+            </button>
             <button
               type="button"
               className={styles.collapse}

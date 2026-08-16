@@ -4,6 +4,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.0.3] - 2026-08-16
+
+### Added
+
+- 文件图标：常见格式按扩展名显示着色徽章（TS/JS/PY/HTML/CSS 等代码文件）、
+  emoji（图片、音视频、压缩包、Office 文档、安装包等），目录展开/收起图标区分
+- 自动换行开关：标签栏一键在「软换行（仅显示层换行，不改动文件）」与
+  「长行横向滚动」之间切换；偏好写入 localStorage 持久化
+- 高亮层与编辑层滚动槽对齐、tab 缩进对齐修复
+
 ## [0.0.1] - 2026-08-14
 
 ### Added

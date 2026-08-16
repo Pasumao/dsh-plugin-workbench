@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-workbench",
   "description": "VS Code-style workspace file explorer + editable preview for the dsh web GUI",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "engines": {
@@ -26,7 +26,8 @@
     "build": "tsdown",
     "watch": "tsdown --watch",
     "typecheck": "tsc --noEmit",
-    "prepare": "pnpm run build"
+    "prepare": "pnpm run build",
+    "postbuild": "node scripts/verify-alignment.mjs"
   },
   "license": "MIT",
   "author": "Pasumao <1830316810@qq.com>",

@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import styles from './files.module.css'
+import { FileIcon } from './fileIcons'
 import type { FilesKey } from './locales'
 import { expandPreview, openFile, setCwd, toggleTheme, useTabsState } from './store'
 
@@ -303,7 +304,9 @@ export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileE
           >
             {isDir ? (isExpanded ? '▾' : '▸') : ''}
           </span>
-          <span className={styles.icon}>{isDir ? '📁' : entry.kind === 'file' ? '📄' : '·'}</span>
+          <span className={styles.icon}>
+            {isDir ? (isExpanded ? '📂' : '📁') : entry.kind === 'file' ? <FileIcon name={entry.name} /> : '·'}
+          </span>
           <span className={styles.name}>{entry.name}</span>
           {entry.kind === 'file' && entry.size !== undefined && (
             <span className={styles.size}>{formatSize(entry.size)}</span>
