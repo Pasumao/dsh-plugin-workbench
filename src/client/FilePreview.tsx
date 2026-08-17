@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import styles from './files.module.css'
-import { highlightCode } from './highlight'
+import { detectLanguage, highlightCode } from './highlight'
 import { FileIcon } from './fileIcons'
 import type { FilesKey } from './locales'
 import { activateFile, closeFile, collapsePreview, moveTab, toggleWrap, useTabsState } from './store'
@@ -36,6 +36,22 @@ export interface FilePreviewProps {
 const PREVIEW_MIN = 240
 const CHAT_MIN = 240
 const PREVIEW_TOO_LARGE_LABEL = '512KB'
+
+/**
+ * Above this size the overlay editor (syntax-highlight layer + transparent
+ * textarea) falls back to a plain textarea: re-injecting and re-laying out
+ * hundreds of KB of wrapped text on every keystroke is what makes the page
+ * lag. The plain textarea keeps editing, wrapping and scrolling — it only
+ * loses the colors, which files this big rarely need anyway.
+ */
+const HIGHLIGHT_MAX_BYTES = 64 * 1024
+
+/**
+ * Languages always rendered as a plain textarea, never the overlay: the
+ * highlight layer costs a full extra layout pass (and with CJK text a
+ * fragile alignment surface) for prose formats where colors add little.
+ */
+const PLAIN_LANGUAGES = new Set(['markdown'])
 
 function basenameOf(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, '')
@@ -77,38 +93,46 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
   const previewRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<HTMLDivElement>(null)
   const highlightRef = useRef<HTMLPreElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const refresh = useCallback(() => bump((v) => v + 1), [])
 
-  // Read newly opened tabs and drop cache entries for closed tabs.
+  // Read the ACTIVE tab's content. Other tabs load lazily on first
+  // activation, so switching to a workspace with many large files doesn't
+  // re-read every tab at once (which used to freeze the switch).
   useEffect(() => {
     const cache = cacheRef.current
     for (const [path] of cache) {
       if (!tabs.includes(path)) cache.delete(path)
     }
-    const controllers: AbortController[] = []
-    for (const path of tabs) {
-      if (cache.has(path)) continue
-      cache.set(path, { status: 'loading' })
-      const controller = new AbortController()
-      controllers.push(controller)
-      readFile(path, controller.signal)
-        .then((result) => {
-          if (!controller.signal.aborted) {
-            cache.set(path, previewDataOf(result))
-            refresh()
-          }
-        })
-        .catch((error) => {
-          if (!controller.signal.aborted) {
-            cache.set(path, { status: 'error', message: error instanceof Error ? error.message : String(error) })
-            refresh()
-          }
-        })
+    const target = active ?? tabs[0]
+    if (target === undefined || cache.has(target)) {
+      refresh()
+      return undefined
     }
+    const controller = new AbortController()
+    cache.set(target, { status: 'loading' })
+    readFile(target, controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted) {
+          cache.set(target, previewDataOf(result))
+          // Large content: yield one frame so the browser paints the
+          // loading→loaded transition before the heavy text layout runs —
+          // the UI stays responsive instead of freezing in the same frame
+          // as the tab-open interaction.
+          if (result.size > HIGHLIGHT_MAX_BYTES) requestAnimationFrame(refresh)
+          else refresh()
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          cache.set(target, { status: 'error', message: error instanceof Error ? error.message : String(error) })
+          refresh()
+        }
+      })
     refresh()
-    return () => controllers.forEach((c) => c.abort())
-  }, [tabs, readFile, refresh])
+    return () => controller.abort()
+  }, [tabs, active, readFile, refresh])
 
   // Animate the last tab closing without a mount/unmount bounce: keep the pane
   // mounted while `hasOpenedRef` is set, then drop it after the transition.
@@ -130,6 +154,31 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
   }, [tabs.length])
 
   const isOpen = !collapsed && (tabs.length > 0 || closing || hasOpenedRef.current)
+
+  const activeData = active !== undefined ? cacheRef.current.get(active) : undefined
+  const language = active !== undefined ? detectLanguage(active) : undefined
+  const tooBig = (activeData?.size ?? 0) > HIGHLIGHT_MAX_BYTES
+  const plain = language === undefined || tooBig || (language !== undefined && PLAIN_LANGUAGES.has(language))
+
+  // Keep the highlight layer's scroll in lockstep with the textarea on every
+  // frame while the overlay editor is open: some engines don't fire scroll
+  // events during selection auto-scroll, which would otherwise leave the
+  // visible layer behind the selection (drag-select misalignment). Both
+  // layers are `overflow: auto` with identical content, so the assignment is
+  // a no-op whenever they are already aligned.
+  useEffect(() => {
+    const pre = highlightRef.current
+    const ta = textareaRef.current
+    if (pre === null || ta === null || plain) return undefined
+    let raf = 0
+    const tick = () => {
+      pre.scrollTop = ta.scrollTop
+      pre.scrollLeft = ta.scrollLeft
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [isOpen, active, activeData?.status, plain])
 
   // Publish the rendered preview width so the skin's fixed top/bottom trim can
   // shift past this pane (covering only the chat).
@@ -236,8 +285,6 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
     setDragPath(undefined)
   }, [])
 
-  const activeData = active !== undefined ? cacheRef.current.get(active) : undefined
-
   if (!isOpen) return null
 
   const renderBody = () => {
@@ -245,14 +292,19 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
     switch (activeData.status) {
       case 'loading':
         return <div className={styles.previewHint}>{t('preview.loading')}</div>
-      case 'loaded': {
-        const highlighted = active !== undefined ? highlightCode(activeData.draft ?? '', active) : ''
+      case 'loaded':
         return (
-          <div className={styles.editor} data-wrap={wrap ? 'on' : 'off'}>
-            <pre ref={highlightRef} className={styles.editorHighlight} aria-hidden="true">
-              <code dangerouslySetInnerHTML={{ __html: highlighted }} />
-            </pre>
+          <div
+            className={`${styles.editor}${plain ? ` ${styles.editorPlain}` : ''}`}
+            data-wrap={wrap ? 'on' : 'off'}
+          >
+            {!plain && active !== undefined && (
+              <pre ref={highlightRef} className={styles.editorHighlight} aria-hidden="true">
+                <code dangerouslySetInnerHTML={{ __html: highlightCode(activeData.draft ?? '', active) }} />
+              </pre>
+            )}
             <textarea
+              ref={textareaRef}
               className={styles.editorTextarea}
               value={activeData.draft ?? ''}
               onChange={(e) => onTextareaChange(e.target.value)}
@@ -260,12 +312,11 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
               onKeyDown={onKeyDown}
               spellCheck={false}
               wrap={wrap ? 'soft' : 'off'}
-              title={t('action.saveHint')}
             />
+            {language !== undefined && tooBig && <div className={styles.editorHint}>{t('preview.highlightOff')}</div>}
             {saveError !== undefined && <div className={styles.saveError}>{saveError}</div>}
           </div>
         )
-      }
       case 'binary':
         return (
           <div className={styles.previewHint}>

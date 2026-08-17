@@ -420,6 +420,29 @@
   position: relative;
   height: 100%;
   min-height: 0;
+  /* Keep layout/paint churn local to the editor: huge wrapped content must
+     not invalidate the whole page on every edit or scroll. */
+  contain: layout paint;
+}
+
+/* Plain (no-overlay) editor: the textarea itself renders the visible text —
+   used for files without syntax highlighting (e.g. .txt novels) and for
+   files too large to re-highlight per keystroke without lag. */
+.editorPlain .editorTextarea {
+  color: var(--fe-fg);
+}
+
+/* Large-file notice chip: syntax highlight was dropped to stay responsive. */
+.editorHint {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: var(--fe-hover);
+  color: var(--fe-muted);
+  font-size: 11px;
+  pointer-events: none;
 }
 
 .editorHighlight {
@@ -427,6 +450,12 @@
   inset: 0;
   margin: 0;
   padding: 12px;
+  /* The textarea reserves one extra line at the bottom (its caret reserve),
+     so it can scroll ~1 line further than this layer. Match that range so
+     the two layers never desync at the bottom of a long file — otherwise
+     drag-selection near the end would highlight text one line ABOVE the
+     visible text. */
+  padding-bottom: calc(12px + 1.5em);
   /* auto (not hidden): the highlight layer gets the same scrollbar gutter as
      the textarea, so both content boxes have identical widths and wrap at the
      same points. Its scrollbars stack invisibly beneath the textarea's. */
@@ -573,8 +602,13 @@
   font-style: italic;
 }
 
+/* Strong emphasis is color-only on purpose: `font-weight: bold` widens
+   glyphs, so the highlight layer would wrap at different points than the
+   textarea beneath it — drag-selection would then highlight text that no
+   longer matches the visible lines. Italic above is metric-neutral. */
 .editorHighlight :global(.hljs-strong) {
-  font-weight: bold;
+  color: var(--fe-accent);
+  font-weight: inherit;
 }
 
 /* ---- Skin chrome fix ----

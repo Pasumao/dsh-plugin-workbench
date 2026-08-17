@@ -19,6 +19,7 @@ export const zh = {
   'preview.tooLarge': '文件过大，仅支持预览不超过 {limit}',
   'preview.emptyDir': '空目录',
   'preview.error': '加载失败',
+  'preview.highlightOff': '大文件：已关闭语法高亮（仍可编辑）',
 } as const
 
 export type FilesKey = keyof typeof zh
@@ -40,4 +41,5 @@ export const en: Record<FilesKey, string> = {
   'preview.tooLarge': 'File too large to preview (limit {limit})',
   'preview.emptyDir': 'Empty directory',
   'preview.error': 'Load failed',
+  'preview.highlightOff': 'Large file: syntax highlighting off (still editable)',
 }

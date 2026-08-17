@@ -13,10 +13,11 @@ DSH Web GUI 的 VS Code 风格文件浏览器插件：文件树 + 可编辑代�
 
 - 文件树：懒加载、2 秒自动刷新、每工作区独立展开状态
 - 文件图标：常见格式显示着色徽章（代码）/ emoji（图片、音视频、压缩包等），目录展开/收起区分
-- 可编辑预览：透明 textarea 叠加语法高亮，`Ctrl+S`/`Cmd+S` 保存
+- 可编辑预览：透明 textarea 叠加语法高亮，`Ctrl+S`/`Cmd+S` 保存；
+  md/.txt 等散文格式与超大代码文件自动降级为纯文本编辑，加载快、不卡界面
 - 自动换行：标签栏一键切换软换行（仅显示层换行，不改动文件内容）或长行横向滚动，偏好持久化
 - 标签页：多文件、拖拽排序、收起/弹出；亮暗主题一键切换
-- 语法高亮：highlight.js（JS/TS、Python、JSON、HTML、CSS、Markdown、Shell 等）
+- 语法高亮：highlight.js（JS/TS、Python、JSON、HTML、CSS、Shell 等；Markdown 以纯文本显示）
 
 ## 安装
 

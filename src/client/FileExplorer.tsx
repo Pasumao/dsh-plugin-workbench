@@ -3,7 +3,7 @@
  * (patched) ui-layout AppFrame. File selection is pushed into the shared
  * selection store so the `explorer.preview` slot can render the split view.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import styles from './files.module.css'
 import { FileIcon } from './fileIcons'
 import type { FilesKey } from './locales'
@@ -64,6 +64,12 @@ function formatSize(bytes: number): string {
 /** How often the visible tree is re-listed to pick up disk changes. */
 const REFRESH_MS = 2000
 
+/** How many previously-expanded folders to re-list at once on workspace switch. */
+const DIR_LOAD_BATCH = 4
+
+/** Pause between batches when restoring expanded folders. */
+const DIR_LOAD_GAP_MS = 50
+
 const EMPTY_EXPANDED = new Set<string>()
 
 /** True when two directory listings are identical (name/kind/size). */
@@ -74,6 +80,95 @@ function sameEntries(a: FsListEntry[], b: FsListEntry[]): boolean {
   }
   return true
 }
+
+interface TreeRowProps {
+  entry: FsListEntry
+  depth: number
+  isActive: boolean
+  isExpanded: boolean
+  onToggleDir: (path: string) => void
+  onRefreshDir: (path: string) => void
+  onSelect: (entry: FsListEntry) => void
+  onDoubleClick: (entry: FsListEntry) => void
+  onOpenExternal: (path: string) => Promise<void>
+  t: (key: FilesKey, params?: Record<string, unknown>) => string
+}
+
+/**
+ * One tree row, memoized so opening/activating a file (which changes the
+ * active-path highlight) re-renders only the affected row — with a workspace
+ * full of files, re-rendering the whole tree on every click is what made
+ * opening files feel laggy.
+ */
+const TreeRow = memo(function TreeRow({
+  entry,
+  depth,
+  isActive,
+  isExpanded,
+  onToggleDir,
+  onRefreshDir,
+  onSelect,
+  onDoubleClick,
+  onOpenExternal,
+  t,
+}: TreeRowProps) {
+  const isDir = entry.kind === 'dir'
+  return (
+    <div
+      className={`${styles.row} ${isActive ? styles.rowSelected : ''}`}
+      style={{ paddingLeft: 8 + depth * 14 }}
+      onClick={() => onSelect(entry)}
+      onDoubleClick={() => onDoubleClick(entry)}
+      role="treeitem"
+      aria-selected={isActive}
+      aria-expanded={isDir ? isExpanded : undefined}
+      title={entry.name}
+    >
+      <span
+        className={styles.chevron}
+        onClick={(e) => {
+          e.stopPropagation()
+          if (isDir) onToggleDir(entry.path)
+        }}
+      >
+        {isDir ? (isExpanded ? '▾' : '▸') : ''}
+      </span>
+      <span className={styles.icon}>
+        {isDir ? (isExpanded ? '📂' : '📁') : entry.kind === 'file' ? <FileIcon name={entry.name} /> : '·'}
+      </span>
+      <span className={styles.name}>{entry.name}</span>
+      {entry.kind === 'file' && entry.size !== undefined && (
+        <span className={styles.size}>{formatSize(entry.size)}</span>
+      )}
+      <span className={styles.actions}>
+        <button
+          type="button"
+          className={styles.action}
+          title={t('action.open')}
+          onClick={(e) => {
+            e.stopPropagation()
+            void onOpenExternal(entry.path)
+          }}
+        >
+          ↗
+        </button>
+        {isDir && (
+          <button
+            type="button"
+            className={styles.action}
+            title={t('action.refresh')}
+            onClick={(e) => {
+              e.stopPropagation()
+              onRefreshDir(entry.path)
+            }}
+          >
+            ⟳
+          </button>
+        )}
+      </span>
+    </div>
+  )
+})
 
 export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileExplorerProps) {
   const sessionList = useSessions((s) => s)
@@ -98,6 +193,10 @@ export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileE
   // Latest tree snapshot for the polling tick (avoids stale closures).
   const treeRef = useRef({ root, children, expanded, rootLoading })
   treeRef.current = { root, children, expanded, rootLoading }
+  // Stable view of the loaded listings so toggleDir doesn't depend on the
+  // children state (keeps memoized rows from re-rendering on listing updates).
+  const childrenRef = useRef(children)
+  childrenRef.current = children
 
   // Expose the explorer width so the maid-atelier fixed chrome (top/bottom
   // trim) can shift past this column instead of covering it.
@@ -129,15 +228,22 @@ export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileE
     const controller = new AbortController()
     rootAbortRef.current = controller
     listDir(cwd, controller.signal)
-      .then((result) => {
+      .then(async (result) => {
         if (controller.signal.aborted) return
         setRoot(result.root)
         setChildren({ [result.root]: result.entries })
         setRootError(undefined)
-        // Reload the contents of this workspace's previously-expanded folders
-        // right away instead of waiting for the auto-refresh tick.
-        for (const dirPath of expanded) {
-          if (dirPath !== result.root) void loadDir(dirPath)
+        // Restore previously-expanded folders in small batches so a workspace
+        // with many expanded folders doesn't flood the tree (and the page)
+        // all at once; the auto-refresh tick fills any remainder shortly after.
+        const dirs = [...expanded].filter((dirPath) => dirPath !== result.root)
+        for (let i = 0; i < dirs.length; i += DIR_LOAD_BATCH) {
+          if (controller.signal.aborted) return
+          const batch = dirs.slice(i, i + DIR_LOAD_BATCH)
+          await Promise.all(batch.map((dirPath) => loadDir(dirPath)))
+          if (i + DIR_LOAD_BATCH < dirs.length) {
+            await new Promise((resolve) => setTimeout(resolve, DIR_LOAD_GAP_MS))
+          }
         }
       })
       .catch((error) => {
@@ -240,8 +346,8 @@ export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileE
       else next.add(dirPath)
       return { ...prev, [cwdKey]: next }
     })
-    if (!children[dirPath]) void loadDir(dirPath)
-  }, [cwdKey, children, loadDir])
+    if (!childrenRef.current[dirPath]) void loadDir(dirPath)
+  }, [cwdKey, loadDir])
 
   const refreshDir = useCallback((dirPath: string) => {
     setChildren((prev) => {
@@ -285,59 +391,18 @@ export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileE
 
     return (
       <div key={entry.path}>
-        <div
-          className={`${styles.row} ${entry.kind === 'file' && activePath === entry.path ? styles.rowSelected : ''}`}
-          style={{ paddingLeft: 8 + depth * 14 }}
-          onClick={() => onRowClick(entry)}
-          onDoubleClick={() => onRowDoubleClick(entry)}
-          role="treeitem"
-          aria-selected={entry.kind === 'file' && activePath === entry.path}
-          aria-expanded={isDir ? isExpanded : undefined}
-          title={entry.name}
-        >
-          <span
-            className={styles.chevron}
-            onClick={(e) => {
-              e.stopPropagation()
-              if (isDir) toggleDir(entry.path)
-            }}
-          >
-            {isDir ? (isExpanded ? '▾' : '▸') : ''}
-          </span>
-          <span className={styles.icon}>
-            {isDir ? (isExpanded ? '📂' : '📁') : entry.kind === 'file' ? <FileIcon name={entry.name} /> : '·'}
-          </span>
-          <span className={styles.name}>{entry.name}</span>
-          {entry.kind === 'file' && entry.size !== undefined && (
-            <span className={styles.size}>{formatSize(entry.size)}</span>
-          )}
-          <span className={styles.actions}>
-            <button
-              type="button"
-              className={styles.action}
-              title={t('action.open')}
-              onClick={(e) => {
-                e.stopPropagation()
-                void openPath(entry.path)
-              }}
-            >
-              ↗
-            </button>
-            {isDir && (
-              <button
-                type="button"
-                className={styles.action}
-                title={t('action.refresh')}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  refreshDir(entry.path)
-                }}
-              >
-                ⟳
-              </button>
-            )}
-          </span>
-        </div>
+        <TreeRow
+          entry={entry}
+          depth={depth}
+          isActive={entry.kind === 'file' && activePath === entry.path}
+          isExpanded={isExpanded}
+          onToggleDir={toggleDir}
+          onRefreshDir={refreshDir}
+          onSelect={onRowClick}
+          onDoubleClick={onRowDoubleClick}
+          onOpenExternal={openPath}
+          t={t}
+        />
         {isDir && isExpanded && (
           <div>
             {isLoading && <div className={styles.rowHint} style={{ paddingLeft: 8 + (depth + 1) * 14 }}>{t('preview.loading')}</div>}
