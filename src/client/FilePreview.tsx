@@ -1,13 +1,17 @@
 /**
  * Split file preview with VS Code-style tabs and a directly-editable editor.
  * Files open in tabs; the active tab is an always-editable textarea overlaid on
- * a syntax-highlighted layer (Ctrl/Cmd+S saves). Tabs are drag-reorderable.
- * Opening/closing the first/last tab is animated.
+ * a syntax-highlighted layer (Ctrl/Cmd+S saves). Markdown files open in a
+ * RENDERED preview by default, with a button to switch to the editable source
+ * view. Tabs are drag-reorderable. Open files are watched on disk: external
+ * changes auto-sync clean tabs and flag dirty ones (click the badge to reload,
+ * discarding unsaved edits). Opening/closing the first/last tab is animated.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import styles from './files.module.css'
 import { detectLanguage, highlightCode } from './highlight'
+import { renderMarkdown } from './markdown'
 import { FileIcon } from './fileIcons'
 import type { FilesKey } from './locales'
 import { activateFile, closeFile, collapsePreview, moveTab, toggleWrap, useTabsState } from './store'
@@ -20,6 +24,10 @@ interface TabData {
   dirty?: boolean
   size?: number
   message?: string
+  /** Markdown tabs: 'rendered' shows the compiled preview, 'source' the editor. */
+  view?: 'rendered' | 'source'
+  /** The file changed on disk while this tab holds unsaved edits. */
+  diskChanged?: boolean
 }
 
 export interface FsWriteResult {
@@ -31,6 +39,8 @@ export interface FilePreviewProps {
   t: (key: FilesKey, params?: Record<string, unknown>) => string
   readFile: (path: string, signal?: AbortSignal) => Promise<FsReadResult>
   writeFile: (path: string, content: string, signal?: AbortSignal) => Promise<FsWriteResult>
+  /** Replace the host-side watch set (the open tab paths). Idempotent diff. */
+  watchFiles: (paths: string[]) => Promise<void>
 }
 
 const PREVIEW_MIN = 240
@@ -39,6 +49,15 @@ const PREVIEW_TOO_LARGE_LABEL = '512KB'
 
 /** Same-origin raw-bytes route registered by the host half (see src/index.ts). */
 const RAW_PREFIX = '/dsh-plugin-files/raw'
+
+/** Same-origin SSE endpoint pushed by the host half (see src/index.ts). */
+const EVENTS_ENDPOINT = '/dsh-plugin-files/events'
+
+/**
+ * Above this size an .md file opens in source view: compiling a multi-hundred
+ * KB document and laying out its DOM is what makes the pane lag.
+ */
+const MD_RENDER_MAX_BYTES = 256 * 1024
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'svg'])
 
@@ -89,10 +108,28 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+/** Parent directory of a path ('C:/a/b.md' → 'C:/a'; '' when there is none). */
+function dirnameOf(path: string): string {
+  const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return idx > 0 ? path.slice(0, idx) : ''
+}
+
 function previewDataOf(result: FsReadResult): TabData {
   if (result.truncated) return { status: 'too-large', size: result.size }
   if (result.binary) return { status: 'binary', size: result.size }
-  return { status: 'loaded', content: result.content, draft: result.content, dirty: false, size: result.size }
+  const data: TabData = {
+    status: 'loaded',
+    content: result.content,
+    draft: result.content,
+    dirty: false,
+    size: result.size,
+  }
+  // Markdown opens in the rendered preview by default (source view for files
+  // too large to render responsively).
+  if (detectLanguage(result.path) === 'markdown' && result.size <= MD_RENDER_MAX_BYTES) {
+    data.view = 'rendered'
+  }
+  return data
 }
 
 /**
@@ -108,7 +145,7 @@ function lineNumbersOf(content: string): string {
   return parts.join('\n')
 }
 
-export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
+export function FilePreview({ t, readFile, writeFile, watchFiles }: FilePreviewProps) {
   const { tabs, active, theme, collapsed, wrap } = useTabsState()
 
   const [previewWidth, setPreviewWidth] = useState<number | null>(null)
@@ -128,6 +165,96 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
   const gutterRef = useRef<HTMLDivElement>(null)
 
   const refresh = useCallback(() => bump((v) => v + 1), [])
+
+  // Mirror of the current tab list for the SSE handler (avoids stale closures).
+  const tabsRef = useRef(tabs)
+  useEffect(() => {
+    tabsRef.current = tabs
+  }, [tabs])
+
+  /**
+   * Re-read one open file from disk (external edit sync, or the disk-changed
+   * badge click). A reload always takes disk content — the auto-sync path only
+   * runs on clean tabs, and the badge click is the user's explicit choice to
+   * drop unsaved edits.
+   */
+  const reloadFromDisk = useCallback(async (path: string) => {
+    const data = cacheRef.current.get(path)
+    if (data === undefined || data.status !== 'loaded') return
+    try {
+      const result = await readFile(path)
+      const next = previewDataOf(result)
+      // Keep the user's chosen view; a reload never flips rendered/source.
+      cacheRef.current.set(path, { ...next, view: data.view, diskChanged: false })
+    } catch (error) {
+      // File gone / unreadable: surface the failure instead of stale content.
+      cacheRef.current.set(path, {
+        ...data,
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+        diskChanged: false,
+      })
+    }
+    refresh()
+  }, [readFile, refresh])
+
+  /**
+   * Handle one disk-change event for an open path. Clean tabs auto-sync;
+   * dirty tabs keep their unsaved edits and show the reload badge instead.
+   */
+  const syncFromDisk = useCallback((path: string) => {
+    const data = cacheRef.current.get(path)
+    if (data === undefined || data.status === 'loading' || data.status === 'image') return
+    if (data.status === 'error') {
+      // Previously failed tab: retry the read (e.g. the file was re-created).
+      void reloadFromDisk(path)
+      return
+    }
+    if (data.dirty === true) {
+      if (data.diskChanged !== true) {
+        data.diskChanged = true
+        refresh()
+      }
+      return
+    }
+    void reloadFromDisk(path)
+  }, [reloadFromDisk, refresh])
+
+  // Disk watch: tell the host which paths to watch (debounced), and re-send on
+  // every SSE (re)connect so a dropped stream heals itself.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void watchFiles([...tabs]).catch(() => {
+        // Host side not ready yet — the next tab change or SSE open retries.
+      })
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [tabs, watchFiles])
+
+  // Disk change events pushed by the host (fs.watch + SSE).
+  useEffect(() => {
+    const source = new EventSource(EVENTS_ENDPOINT)
+    source.onopen = () => {
+      void watchFiles([...tabsRef.current]).catch(() => {
+        // Ignore — the next onopen or tab change re-syncs.
+      })
+    }
+    const onChange = (event: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(event.data) as { path?: unknown }
+        if (typeof payload.path === 'string' && tabsRef.current.includes(payload.path)) {
+          syncFromDisk(payload.path)
+        }
+      } catch {
+        // Malformed frame — ignore.
+      }
+    }
+    source.addEventListener('change', onChange)
+    return () => {
+      source.removeEventListener('change', onChange)
+      source.close()
+    }
+  }, [syncFromDisk, watchFiles])
 
   // Read the ACTIVE tab's content. Other tabs load lazily on first
   // activation, so switching to a workspace with many large files doesn't
@@ -204,6 +331,14 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
   const language = active !== undefined ? detectLanguage(active) : undefined
   const tooBig = (activeData?.size ?? 0) > HIGHLIGHT_MAX_BYTES
   const plain = language === undefined || tooBig || (language !== undefined && PLAIN_LANGUAGES.has(language))
+  const isMarkdown = language === 'markdown'
+  const mdRenderable = (activeData?.size ?? 0) <= MD_RENDER_MAX_BYTES
+  // Rebuild the compiled markdown only when the draft (or the view mode)
+  // changes — never on tab switches or focus re-renders.
+  const mdHtml = useMemo(() => {
+    if (activeData?.status !== 'loaded' || !isMarkdown || activeData.view !== 'rendered') return ''
+    return renderMarkdown(activeData.draft ?? '', dirnameOf(active ?? ''))
+  }, [activeData?.status, activeData?.draft, activeData?.view, isMarkdown, active])
   // Rebuild the gutter text only when the draft changes (not on every bump
   // from tab switches or focus re-renders).
   const gutterNumbers = useMemo(
@@ -233,7 +368,7 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [isOpen, active, activeData?.status, plain])
+  }, [isOpen, active, activeData?.status, activeData?.view, plain])
 
   // Publish the rendered preview width so the skin's fixed top/bottom trim can
   // shift past this pane (covering only the chat).
@@ -304,6 +439,15 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
     refresh()
   }, [active, refresh])
 
+  /** Flip the active markdown tab between rendered preview and source editor. */
+  const toggleMdView = useCallback(() => {
+    if (active === undefined) return
+    const data = cacheRef.current.get(active)
+    if (data === undefined || data.status !== 'loaded') return
+    data.view = data.view === 'rendered' ? 'source' : 'rendered'
+    refresh()
+  }, [active, refresh])
+
   const onKeyDown = useCallback((e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
       e.preventDefault()
@@ -350,6 +494,14 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
       case 'loading':
         return <div className={styles.previewHint}>{t('preview.loading')}</div>
       case 'loaded':
+        if (isMarkdown && activeData.view === 'rendered') {
+          return (
+            <div
+              className={styles.mdPreview}
+              dangerouslySetInnerHTML={{ __html: mdHtml }}
+            />
+          )
+        }
         return (
           <div
             className={`${styles.editor}${plain ? ` ${styles.editorPlain}` : ''}`}
@@ -373,7 +525,8 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
               spellCheck={false}
               wrap={wrap ? 'soft' : 'off'}
             />
-            {language !== undefined && tooBig && <div className={styles.editorHint}>{t('preview.highlightOff')}</div>}
+            {isMarkdown && !mdRenderable && <div className={styles.editorHint}>{t('preview.mdRenderOff')}</div>}
+            {language !== undefined && !isMarkdown && tooBig && <div className={styles.editorHint}>{t('preview.highlightOff')}</div>}
             {saveError !== undefined && <div className={styles.saveError}>{saveError}</div>}
           </div>
         )
@@ -459,6 +612,19 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
                     <span className={styles.tabIcon}><FileIcon name={basenameOf(path)} /></span>
                     <span className={styles.tabName}>{basenameOf(path)}</span>
                     {data?.dirty === true && <span className={styles.tabDot} />}
+                    {data?.diskChanged === true && (
+                      <button
+                        type="button"
+                        className={styles.tabDiskBadge}
+                        title={t('tab.diskChanged')}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void reloadFromDisk(path)
+                        }}
+                      >
+                        {'⟳'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       className={styles.tabClose}
@@ -474,6 +640,16 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
                 )
               })}
             </div>
+            {isMarkdown && activeData?.status === 'loaded' && mdRenderable && (
+              <button
+                type="button"
+                className={styles.tabAction}
+                title={activeData.view === 'rendered' ? t('action.mdSource') : t('action.mdRender')}
+                onClick={toggleMdView}
+              >
+                {activeData.view === 'rendered' ? '📝' : '👁'}
+              </button>
+            )}
             <button
               type="button"
               className={`${styles.tabAction}${wrap ? ` ${styles.tabActionActive}` : ''}`}

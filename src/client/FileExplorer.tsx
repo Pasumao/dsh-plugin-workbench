@@ -4,11 +4,12 @@
  * selection store so the `explorer.preview` slot can render the split view.
  */
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { MouseEvent as ReactMouseEvent } from 'react'
+import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import styles from './files.module.css'
 import { FileIcon } from './fileIcons'
 import type { FilesKey } from './locales'
-import { closeFilesUnder, expandPreview, openFile, retargetFile, setCwd, toggleTheme, useTabsState } from './store'
+import { cancelCut, clearClipboard, closeFilesUnder, copyToClipboard, expandPreview, openFile, popUndo, pushUndo, retargetFile, setCwd, toggleTheme, useClipboard, useTabsState } from './store'
+import type { ClipboardItem, ClipboardMode, UndoEntry } from './store'
 
 export interface FsListEntry {
   name: string
@@ -51,10 +52,12 @@ export interface FileExplorerProps {
   t: (key: FilesKey, params?: Record<string, unknown>) => string
   listDir: (path: string, signal?: AbortSignal) => Promise<FsListResult>
   openPath: (path: string) => Promise<void>
+  revealInExplorer: (path: string, kind: 'file' | 'dir', signal?: AbortSignal) => Promise<FsMutationResult>
   createFile: (path: string, signal?: AbortSignal) => Promise<FsMutationResult>
   createDir: (path: string, signal?: AbortSignal) => Promise<FsMutationResult>
   renameFile: (path: string, to: string, signal?: AbortSignal) => Promise<FsMutationResult>
   removePath: (path: string, signal?: AbortSignal) => Promise<FsMutationResult>
+  copyPath: (from: string, to: string, overwrite: boolean, signal?: AbortSignal) => Promise<FsMutationResult>
 }
 
 function basenameOf(path: string): string {
@@ -73,6 +76,28 @@ function parentOf(path: string): string {
 function joinPath(dir: string, name: string): string {
   const sep = dir.includes('\\') ? '\\' : '/'
   return dir.endsWith('\\') || dir.endsWith('/') ? dir + name : dir + sep + name
+}
+
+/** "a.txt" → "a - Copy.txt", "folder" → "folder - Copy" (OS explorer duplicate naming). */
+function copyName(name: string): string {
+  const idx = name.lastIndexOf('.')
+  if (idx <= 0) return `${name} - Copy`
+  return `${name.slice(0, idx)} - Copy${name.slice(idx)}`
+}
+
+/**
+ * Hidden folder next to a deleted item that holds it until undo restores it
+ * (delete = rename into here, undo = rename back — no bytes are copied).
+ */
+const TRASH_NAME = '.dsh-trash'
+
+/** Number of separators in a path — used to delete children before parents. */
+function sepCount(path: string): number {
+  let n = 0
+  for (let i = 0; i < path.length; i += 1) {
+    if (path[i] === '/' || path[i] === '\\') n += 1
+  }
+  return n
 }
 
 function formatSize(bytes: number): string {
@@ -107,13 +132,21 @@ interface TreeRowProps {
   entry: FsListEntry
   depth: number
   isActive: boolean
+  isSelected: boolean
+  isCut: boolean
   isExpanded: boolean
+  isDropTarget: boolean
   onToggleDir: (path: string) => void
   onRefreshDir: (path: string) => void
-  onSelect: (entry: FsListEntry) => void
+  onSelect: (entry: FsListEntry, e: ReactMouseEvent) => void
   onDoubleClick: (entry: FsListEntry) => void
   onOpenExternal: (path: string) => Promise<void>
   onContextMenu: (e: ReactMouseEvent, entry: FsListEntry) => void
+  onDragStart: (e: ReactDragEvent, entry: FsListEntry) => void
+  onDragEnd: () => void
+  onDragOverRow: (e: ReactDragEvent, entry: FsListEntry) => void
+  onDragLeaveRow: () => void
+  onDropRow: (e: ReactDragEvent, entry: FsListEntry) => void
   t: (key: FilesKey, params?: Record<string, unknown>) => string
 }
 
@@ -127,25 +160,39 @@ const TreeRow = memo(function TreeRow({
   entry,
   depth,
   isActive,
+  isSelected,
+  isCut,
   isExpanded,
+  isDropTarget,
   onToggleDir,
   onRefreshDir,
   onSelect,
   onDoubleClick,
   onOpenExternal,
   onContextMenu,
+  onDragStart,
+  onDragEnd,
+  onDragOverRow,
+  onDragLeaveRow,
+  onDropRow,
   t,
 }: TreeRowProps) {
   const isDir = entry.kind === 'dir'
   return (
     <div
-      className={`${styles.row} ${isActive ? styles.rowSelected : ''}`}
+      className={`${styles.row} ${isSelected || isActive ? styles.rowSelected : ''}${isCut ? ` ${styles.rowCut}` : ''}${isDropTarget ? ` ${styles.rowDropTarget}` : ''}`}
       style={{ paddingLeft: 8 + depth * 14 }}
-      onClick={() => onSelect(entry)}
+      draggable
+      onClick={(e) => onSelect(entry, e)}
       onDoubleClick={() => onDoubleClick(entry)}
       onContextMenu={(e) => onContextMenu(e, entry)}
+      onDragStart={(e) => onDragStart(e, entry)}
+      onDragEnd={onDragEnd}
+      onDragOver={(e) => onDragOverRow(e, entry)}
+      onDragLeave={onDragLeaveRow}
+      onDrop={(e) => onDropRow(e, entry)}
       role="treeitem"
-      aria-selected={isActive}
+      aria-selected={isSelected || isActive}
       aria-expanded={isDir ? isExpanded : undefined}
       title={entry.name}
     >
@@ -201,15 +248,17 @@ export function FileExplorer({
   t,
   listDir,
   openPath,
+  revealInExplorer,
   createFile,
   createDir,
   renameFile,
   removePath,
+  copyPath,
 }: FileExplorerProps) {
   const sessionList = useSessions((s) => s)
   const currentId = sessionList.current
   const cwd = currentId !== undefined ? sessionList.byId[currentId]?.cwd : undefined
-  const { active: activePath, theme } = useTabsState()
+  const { active: activePath, theme, undo: undoEntries } = useTabsState()
 
   const rootAbortRef = useRef<AbortController | null>(null)
 
@@ -225,9 +274,19 @@ export function FileExplorer({
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set())
   const [dirErrors, setDirErrors] = useState<Record<string, string>>({})
 
-  // ---- context menu ----
+  // Explorer-like selection (path → kind). A plain click replaces it,
+  // Ctrl/Cmd+click toggles membership; copy/cut/paste act on it.
+  const [selected, setSelected] = useState<Record<string, FsListEntry['kind']>>({})
+  const clipboard = useClipboard()
+  const treeAreaRef = useRef<HTMLDivElement>(null)
+
+  // ---- drag & drop (move into a folder) ----
+  const dragPathsRef = useRef<string[] | null>(null)
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
+
+  // ---- context menu (rows only: right-clicking blank space shows no menu) ----
   interface MenuState {
-    kind: 'file' | 'dir' | 'root'
+    kind: 'file' | 'dir'
     path: string
     x: number
     y: number
@@ -303,6 +362,7 @@ export function FileExplorer({
     setChildren({})
     setLoadingDirs(new Set())
     setDirErrors({})
+    setSelected({})
     setCwd(cwd)
 
     if (cwd === undefined) {
@@ -449,6 +509,9 @@ export function FileExplorer({
   const openContextMenu = useCallback((e: ReactMouseEvent, entry: FsListEntry) => {
     e.preventDefault()
     e.stopPropagation()
+    // Explorer behavior: right-clicking an unselected item selects it; a
+    // right-click on an already-selected item keeps the multi-selection.
+    setSelected((prev) => (prev[entry.path] !== undefined ? prev : { [entry.path]: entry.kind }))
     setMenu({ kind: entry.kind === 'dir' ? 'dir' : 'file', path: entry.path, x: e.clientX, y: e.clientY })
   }, [])
 
@@ -471,21 +534,196 @@ export function FileExplorer({
     }
   }, [refreshDir, root])
 
+  /**
+   * Record one undoable operation for the current workspace. When the stack
+   * overflows, the oldest entry comes back evicted — if it was a delete, its
+   * trash item can never be restored from here again, so purge it (best
+   * effort; it may already be gone).
+   */
+  const recordUndo = useCallback((entry: UndoEntry) => {
+    const evicted = pushUndo(entry)
+    if (evicted !== undefined && evicted.kind === 'delete') {
+      void removePath(evicted.trash).catch(() => {
+        // already gone — nothing to purge
+      })
+    }
+  }, [removePath])
+
+  /**
+   * Reversible delete: rename the item into a hidden `.dsh-trash` folder next
+   * to it (instant — no bytes copied). Undo renames it back. The trash folder
+   * is created on demand and hidden from the tree.
+   */
+  const trashPath = useCallback(async (path: string): Promise<{ trash: string; parent: string }> => {
+    const parent = parentOf(path)
+    const trashDir = joinPath(parent, TRASH_NAME)
+    // Best-effort: the folder already exists after the first delete.
+    try {
+      await createDir(trashDir)
+    } catch {
+      // exists — fine
+    }
+    // Practically collision-free unique name; rename refuses if it ever collides.
+    const unique = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+    const trash = joinPath(trashDir, `${unique}-${basenameOf(path)}`)
+    await renameFile(path, trash)
+    return { trash, parent }
+  }, [createDir, renameFile])
+
+  /**
+   * Apply clipboard/drag items into a target directory. `cut` moves (copy +
+   * remove source), `copy` duplicates. Every successful item records an undo
+   * entry — copy → remove the copy, move → rename it back. Overwriting copies
+   * are NOT recorded (the pre-existing content is gone for good). Moving an
+   * item into the folder it already lives in is a no-op; copying into the same
+   * folder duplicates it with a " - Copy" suffix, like the OS explorer.
+   */
+  const applyItems = useCallback(async (items: ClipboardItem[], targetDir: string, mode: ClipboardMode) => {
+    const failures: string[] = []
+    const refreshed = new Set<string>()
+    for (const item of items) {
+      let dest = joinPath(targetDir, item.name)
+      const sameDest = dest.toLowerCase() === item.path.toLowerCase()
+      if (mode === 'cut' && sameDest) continue
+      if (sameDest) dest = joinPath(targetDir, copyName(item.name))
+      let overwritten = false
+      try {
+        try {
+          await copyPath(item.path, dest, false)
+        } catch (error) {
+          if ((error as { code?: string }).code !== 'exists') throw error
+          if (!window.confirm(t('confirm.overwrite', { name: item.name }))) continue
+          overwritten = true
+          await copyPath(item.path, dest, true)
+        }
+        if (mode === 'cut') {
+          await removePath(item.path)
+          // Keep any open tab pointed at the moved file.
+          retargetFile(item.path, dest)
+          refreshed.add(parentOf(item.path))
+          recordUndo({ kind: 'move', label: t('undo.move', { name: item.name }), from: item.path, to: dest, parent: targetDir })
+        } else if (!overwritten) {
+          recordUndo({ kind: 'copy', label: t('undo.copy', { name: item.name }), from: item.path, to: dest, parent: targetDir })
+        }
+        refreshed.add(targetDir)
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : String(error))
+      }
+    }
+    for (const p of refreshed) refreshDir(p)
+    return failures
+  }, [copyPath, recordUndo, refreshDir, removePath, retargetFile, t])
+
+  /** Undo the current workspace's most recent operation (Ctrl+Z / header button). */
+  const performUndo = useCallback(async () => {
+    const entry = popUndo()
+    if (entry === undefined) return
+    const refreshed = new Set<string>()
+    try {
+      switch (entry.kind) {
+        case 'copy':
+          await removePath(entry.to)
+          closeFilesUnder(entry.to)
+          refreshed.add(entry.parent)
+          break
+        case 'move':
+          // Rename back: the destination currently holds the moved item.
+          await renameFile(entry.to, entry.from)
+          retargetFile(entry.to, entry.from)
+          refreshed.add(entry.parent)
+          refreshed.add(parentOf(entry.from))
+          break
+        case 'rename':
+          await renameFile(entry.to, entry.from)
+          retargetFile(entry.to, entry.from)
+          refreshed.add(entry.parent)
+          break
+        case 'create':
+          await trashPath(entry.path)
+          closeFilesUnder(entry.path)
+          refreshed.add(entry.parent)
+          break
+        case 'delete':
+          await renameFile(entry.trash, entry.path)
+          refreshed.add(entry.parent)
+          break
+      }
+    } catch (error) {
+      // Put the entry back so the user can retry after fixing the cause, and
+      // surface the reason inline — EXCEPT a delete whose trash item no longer
+      // exists (purged by an overflow, or the .dsh-trash folder removed on
+      // disk): nothing left to restore, so drop it instead of a stuck retry.
+      const message = error instanceof Error ? error.message : String(error)
+      const gone = message.includes('does not exist') || message.includes('not found')
+      if (!(entry.kind === 'delete' && gone)) recordUndo(entry)
+      if (entry.parent === root) setRootError(message)
+      else setDirErrors((prev) => ({ ...prev, [entry.parent]: message }))
+      return
+    }
+    for (const p of refreshed) refreshDir(p)
+  }, [closeFilesUnder, popUndo, recordUndo, refreshDir, removePath, renameFile, retargetFile, root, trashPath])
+
+  /** Delete every selected item (moves each into .dsh-trash; all undoable). */
+  const deleteSelection = useCallback(async () => {
+    const entries = Object.entries(selected).map(([path, kind]) => ({ path, kind }))
+    if (entries.length === 0) return
+    // Children first so deleting a folder alongside its contents doesn't hit
+    // already-gone paths; anything under an already-trashed folder is skipped.
+    entries.sort((a, b) => sepCount(b.path) - sepCount(a.path))
+    const confirmMessage = entries.length === 1
+      ? (entries[0].kind === 'dir'
+          ? t('confirm.deleteDir', { name: basenameOf(entries[0].path) })
+          : t('confirm.deleteFile', { name: basenameOf(entries[0].path) }))
+      : t('confirm.deleteSelected', {
+          count: entries.length,
+          names: entries.slice(0, 3).map((e) => basenameOf(e.path)).join('、'),
+        })
+    if (!window.confirm(confirmMessage)) return
+    const failures: string[] = []
+    const refreshed = new Set<string>()
+    const trashedPrefixes: string[] = []
+    for (const { path, kind } of entries) {
+      const sep = path.includes('\\') ? '\\' : '/'
+      const prefix = path.endsWith('\\') || path.endsWith('/') ? path : path + sep
+      if (trashedPrefixes.some((d) => path.toLowerCase().startsWith(d.toLowerCase()))) continue
+      try {
+        const { trash, parent } = await trashPath(path)
+        if (kind === 'dir') trashedPrefixes.push(prefix)
+        closeFilesUnder(path)
+        recordUndo({ kind: 'delete', label: t('undo.delete', { name: basenameOf(path) }), path, trash, parent })
+        refreshed.add(parent)
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : String(error))
+      }
+    }
+    for (const p of refreshed) refreshDir(p)
+    setSelected({})
+    if (failures.length > 0) setRootError(failures.join('; '))
+  }, [closeFilesUnder, recordUndo, refreshDir, root, selected, t, trashPath])
+
   const onNewFile = useCallback((dirPath: string) => {
     const name = window.prompt(`${t('prompt.newFileName')}:`, '')
     if (name === null) return
     const trimmed = name.trim()
     if (trimmed === '') return
-    void applyMutation(() => createFile(joinPath(dirPath, trimmed)), dirPath)
-  }, [applyMutation, createFile, t])
+    const path = joinPath(dirPath, trimmed)
+    void applyMutation(async () => {
+      await createFile(path)
+      recordUndo({ kind: 'create', label: t('undo.create', { name: trimmed }), path, parent: dirPath })
+    }, dirPath)
+  }, [applyMutation, createFile, recordUndo, t])
 
   const onNewFolder = useCallback((dirPath: string) => {
     const name = window.prompt(`${t('prompt.newFolderName')}:`, '')
     if (name === null) return
     const trimmed = name.trim()
     if (trimmed === '') return
-    void applyMutation(() => createDir(joinPath(dirPath, trimmed)), dirPath)
-  }, [applyMutation, createDir, t])
+    const path = joinPath(dirPath, trimmed)
+    void applyMutation(async () => {
+      await createDir(path)
+      recordUndo({ kind: 'create', label: t('undo.create', { name: trimmed }), path, parent: dirPath })
+    }, dirPath)
+  }, [applyMutation, createDir, recordUndo, t])
 
   const onRename = useCallback((path: string) => {
     const current = basenameOf(path)
@@ -499,19 +737,26 @@ export function FileExplorer({
       await renameFile(path, to)
       // Keep any open tab pointing at the moved file.
       retargetFile(path, to)
+      recordUndo({ kind: 'rename', label: t('undo.rename', { name: current }), from: path, to, parent })
     }, parent)
-  }, [applyMutation, renameFile, t])
+  }, [applyMutation, recordUndo, renameFile, retargetFile, t])
 
   const onDelete = useCallback((path: string, kind: 'file' | 'dir') => {
     const name = basenameOf(path)
     const message = kind === 'dir' ? t('confirm.deleteDir', { name }) : t('confirm.deleteFile', { name })
     if (!window.confirm(message)) return
-    void applyMutation(async () => {
-      await removePath(path)
-      // Drop tabs for the deleted file (or everything under a deleted folder).
-      closeFilesUnder(path)
-    }, parentOf(path))
-  }, [applyMutation, removePath, t])
+    void (async () => {
+      try {
+        const { trash, parent } = await trashPath(path)
+        // Drop tabs for the deleted file (or everything under a deleted folder).
+        closeFilesUnder(path)
+        recordUndo({ kind: 'delete', label: t('undo.delete', { name }), path, trash, parent })
+        refreshDir(parent)
+      } catch (error) {
+        setRootError(error instanceof Error ? error.message : String(error))
+      }
+    })()
+  }, [closeFilesUnder, recordUndo, refreshDir, t, trashPath])
 
   const onCopyPath = useCallback((path: string) => {
     void navigator.clipboard.writeText(path).catch(() => {
@@ -519,7 +764,126 @@ export function FileExplorer({
     })
   }, [])
 
-  const onRowClick = useCallback((entry: FsListEntry) => {
+  /** Reveal in the OS file manager; failures surface as an alert, never silently. */
+  const onReveal = useCallback((path: string, kind: 'file' | 'dir') => {
+    void revealInExplorer(path, kind).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      window.alert(`${t('error.reveal')}：${message}`)
+    })
+  }, [revealInExplorer, t])
+
+  const selectedItems = useCallback((): ClipboardItem[] => (
+    Object.entries(selected).map(([path, kind]) => ({ path, name: basenameOf(path), kind }))
+  ), [selected])
+
+  const onCopySelection = useCallback((mode: ClipboardMode) => {
+    const items = selectedItems()
+    if (items.length === 0) return
+    copyToClipboard(items, mode)
+  }, [selectedItems])
+
+  /** Paste the clipboard into the current folder (or the one selected dir). */
+  const onPaste = useCallback(async () => {
+    const { items, mode } = clipboard
+    if (items.length === 0 || cwd === undefined) return
+    const selEntries = Object.entries(selected)
+    const target = selEntries.length === 1 && selEntries[0][1] === 'dir' ? selEntries[0][0] : cwd
+    const failures = await applyItems(items, target, mode)
+    // Explorer semantics: a cut clears the clipboard once the move lands; a
+    // plain copy stays armed so the user can paste into more folders.
+    if (mode === 'cut') clearClipboard()
+    setSelected({})
+    if (failures.length > 0) {
+      const message = failures.join('; ')
+      if (target === root) setRootError(message)
+      else setDirErrors((prev) => ({ ...prev, [target]: message }))
+    }
+  }, [applyItems, clipboard, clearClipboard, cwd, root, selected])
+
+  // ---- drag & drop (drag selected items onto a folder to move them) ----
+
+  const onRowDragStart = useCallback((e: ReactDragEvent, entry: FsListEntry) => {
+    // Dragging one member of a multi-selection moves the whole selection,
+    // exactly like the OS explorer.
+    const paths = selected[entry.path] !== undefined ? Object.keys(selected) : [entry.path]
+    dragPathsRef.current = paths
+    try {
+      e.dataTransfer.setData('text/plain', entry.path)
+    } catch {
+      // dataTransfer may be unavailable — the ref still carries the paths
+    }
+    e.dataTransfer.effectAllowed = 'move'
+  }, [selected])
+
+  const onRowDragEnd = useCallback(() => {
+    dragPathsRef.current = null
+    setDropTarget(null)
+  }, [])
+
+  const onRowDragOver = useCallback((e: ReactDragEvent, entry: FsListEntry) => {
+    if (dragPathsRef.current === null) return
+    e.stopPropagation()
+    if (entry.kind !== 'dir') return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDropTarget(entry.path)
+  }, [])
+
+  const onRowDragLeave = useCallback(() => setDropTarget(null), [])
+
+  /** Move the dragged paths into `targetDir` (a folder row or the tree area). */
+  const onDropMove = useCallback((e: ReactDragEvent, targetDir: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDropTarget(null)
+    const paths = dragPathsRef.current
+    dragPathsRef.current = null
+    if (paths === null || paths.length === 0) return
+    // Dropping a folder onto itself or into its own subtree is a no-op.
+    const items: ClipboardItem[] = paths.filter((path) => {
+      if (path.toLowerCase() === targetDir.toLowerCase()) return false
+      const sep = path.includes('\\') ? '\\' : '/'
+      const prefix = path.endsWith('\\') || path.endsWith('/') ? path : path + sep
+      return !targetDir.toLowerCase().startsWith(prefix.toLowerCase())
+    }).map((path) => ({
+      path,
+      name: basenameOf(path),
+      kind: selected[path] ?? 'file',
+    }))
+    if (items.length === 0) return
+    setSelected({})
+    void applyItems(items, targetDir, 'cut').then((failures) => {
+      if (failures.length > 0) {
+        const message = failures.join('; ')
+        if (targetDir === root) setRootError(message)
+        else setDirErrors((prev) => ({ ...prev, [targetDir]: message }))
+      }
+    })
+  }, [applyItems, root, selected])
+
+  const onRowDrop = useCallback((e: ReactDragEvent, entry: FsListEntry) => {
+    e.stopPropagation()
+    if (dragPathsRef.current === null || entry.kind !== 'dir') return
+    e.preventDefault()
+    onDropMove(e, entry.path)
+  }, [onDropMove])
+
+  const onRowClick = useCallback((entry: FsListEntry, e: ReactMouseEvent) => {
+    e.stopPropagation()
+    // Rows push keyboard focus onto the tree so Ctrl+C / Ctrl+V / Esc land
+    // here right after a click, instead of going to whatever had focus.
+    treeAreaRef.current?.focus({ preventScroll: true })
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl/Cmd+click toggles membership without opening / expanding.
+      setSelected((prev) => {
+        const next = { ...prev }
+        if (next[entry.path] !== undefined) delete next[entry.path]
+        else next[entry.path] = entry.kind
+        return next
+      })
+      return
+    }
+    setSelected({ [entry.path]: entry.kind })
     if (entry.kind === 'dir') {
       toggleDir(entry.path)
       return
@@ -532,6 +896,66 @@ export function FileExplorer({
     void openPath(entry.path)
   }, [openPath])
 
+  // Explorer-style keyboard: Ctrl/Cmd+C/X copy-cut, Ctrl/Cmd+V paste,
+  // Ctrl/Cmd+A select-all, Escape clears the selection (and cancels a cut).
+  const onTreeKeyDown = useCallback((e: ReactKeyboardEvent) => {
+    const mod = e.ctrlKey || e.metaKey
+    const key = e.key.toLowerCase()
+    if (mod && key === 'c') {
+      const items = selectedItems()
+      if (items.length === 0) return
+      e.preventDefault()
+      copyToClipboard(items, 'copy')
+      return
+    }
+    if (mod && key === 'x') {
+      const items = selectedItems()
+      if (items.length === 0) return
+      e.preventDefault()
+      copyToClipboard(items, 'cut')
+      return
+    }
+    if (mod && key === 'v') {
+      if (clipboard.items.length === 0) return
+      e.preventDefault()
+      void onPaste()
+      return
+    }
+    if (mod && key === 'a') {
+      e.preventDefault()
+      const all: Record<string, FsListEntry['kind']> = {}
+      const collect = (entries: FsListEntry[]) => {
+        for (const entry of entries) {
+          if (entry.name === TRASH_NAME) continue
+          all[entry.path] = entry.kind
+          if (entry.kind === 'dir' && expanded.has(entry.path) && children[entry.path] !== undefined) {
+            collect(children[entry.path] as FsListEntry[])
+          }
+        }
+      }
+      const rootEntries = root !== undefined ? children[root] : undefined
+      if (rootEntries !== undefined) collect(rootEntries)
+      setSelected(all)
+      return
+    }
+    if (mod && key === 'z' && !e.shiftKey) {
+      if (undoEntries.length === 0) return
+      e.preventDefault()
+      void performUndo()
+      return
+    }
+    if (e.key === 'Delete') {
+      if (Object.keys(selected).length === 0) return
+      e.preventDefault()
+      void deleteSelection()
+      return
+    }
+    if (e.key === 'Escape') {
+      setSelected({})
+      cancelCut()
+    }
+  }, [cancelCut, children, clipboard.items.length, deleteSelection, expanded, onPaste, performUndo, root, selectedItems, undoEntries.length])
+
   // ---- placeholder: no session / no cwd ----
   if (cwd === undefined) {
     return (
@@ -543,7 +967,13 @@ export function FileExplorer({
     )
   }
 
-  const renderEntries = (entries: FsListEntry[], depth: number) => entries.map((entry) => {
+  // Cut items ghost in the tree until the paste moves them away.
+  const cutPaths = new Set(clipboard.mode === 'cut' ? clipboard.items.map((item) => item.path) : [])
+
+  /** Listings as the user sees them (the internal trash folder is hidden). */
+  const visibleEntries = (entries: FsListEntry[]) => entries.filter((entry) => entry.name !== TRASH_NAME)
+
+  const renderEntries = (entries: FsListEntry[], depth: number) => visibleEntries(entries).map((entry) => {
     const isDir = entry.kind === 'dir'
     const isExpanded = isDir && expanded.has(entry.path)
     const isLoading = isDir && loadingDirs.has(entry.path)
@@ -556,20 +986,28 @@ export function FileExplorer({
           entry={entry}
           depth={depth}
           isActive={entry.kind === 'file' && activePath === entry.path}
+          isSelected={selected[entry.path] !== undefined}
+          isCut={cutPaths.has(entry.path)}
           isExpanded={isExpanded}
+          isDropTarget={dropTarget === entry.path}
           onToggleDir={toggleDir}
           onRefreshDir={refreshDir}
           onSelect={onRowClick}
           onDoubleClick={onRowDoubleClick}
           onOpenExternal={openPath}
           onContextMenu={openContextMenu}
+          onDragStart={onRowDragStart}
+          onDragEnd={onRowDragEnd}
+          onDragOverRow={onRowDragOver}
+          onDragLeaveRow={onRowDragLeave}
+          onDropRow={onRowDrop}
           t={t}
         />
         {isDir && isExpanded && (
           <div>
             {isLoading && <div className={styles.rowHint} style={{ paddingLeft: 8 + (depth + 1) * 14 }}>{t('preview.loading')}</div>}
             {error !== undefined && !isLoading && <div className={styles.rowError} style={{ paddingLeft: 8 + (depth + 1) * 14 }}>{error}</div>}
-            {childEntries !== undefined && childEntries.length === 0 && !isLoading && (
+            {childEntries !== undefined && visibleEntries(childEntries).length === 0 && !isLoading && (
               <div className={styles.rowHint} style={{ paddingLeft: 8 + (depth + 1) * 14 }}>{t('preview.emptyDir')}</div>
             )}
             {childEntries !== undefined && renderEntries(childEntries, depth + 1)}
@@ -579,16 +1017,34 @@ export function FileExplorer({
     )
   })
 
-  const menuItems = (m: MenuState): Array<{ label: string; danger?: boolean; onClick: () => void } | 'divider'> => {
+  interface MenuItem {
+    label: string
+    danger?: boolean
+    disabled?: boolean
+    onClick: () => void
+  }
+
+  const menuItems = (m: MenuState): Array<MenuItem | 'divider'> => {
+    // Right-clicking one member of a multi-selection operates on the whole
+    // selection (Explorer behavior): show a batch delete instead of the
+    // single-item one.
+    const selectionCount = Object.keys(selected).length
+    const deleteItem: MenuItem = selectionCount > 1
+      ? { label: t('menu.deleteSelected', { count: selectionCount }), danger: true, onClick: () => void deleteSelection() }
+      : { label: t('menu.delete'), danger: true, onClick: () => onDelete(m.path, m.kind) }
     if (m.kind === 'file') {
       return [
         { label: t('menu.open'), onClick: () => openFile(m.path) },
         'divider',
+        { label: t('menu.copy'), onClick: () => onCopySelection('copy') },
+        { label: t('menu.cut'), onClick: () => onCopySelection('cut') },
+        'divider',
         { label: t('menu.copyPath'), onClick: () => onCopyPath(m.path) },
+        { label: t('menu.revealInExplorer'), onClick: () => onReveal(m.path, 'file') },
         { label: t('menu.openSystem'), onClick: () => void openPath(m.path) },
         'divider',
         { label: t('menu.rename'), onClick: () => onRename(m.path) },
-        { label: t('menu.delete'), danger: true, onClick: () => onDelete(m.path, 'file') },
+        deleteItem,
       ]
     }
     if (m.kind === 'dir') {
@@ -596,21 +1052,24 @@ export function FileExplorer({
         { label: t('menu.newFile'), onClick: () => onNewFile(m.path) },
         { label: t('menu.newFolder'), onClick: () => onNewFolder(m.path) },
         'divider',
+        { label: t('menu.copy'), onClick: () => onCopySelection('copy') },
+        { label: t('menu.cut'), onClick: () => onCopySelection('cut') },
+        { label: t('menu.paste'), disabled: clipboard.items.length === 0, onClick: () => void onPaste() },
+        'divider',
         { label: t('menu.copyPath'), onClick: () => onCopyPath(m.path) },
+        { label: t('menu.revealInExplorer'), onClick: () => onReveal(m.path, 'dir') },
         { label: t('menu.openSystem'), onClick: () => void openPath(m.path) },
         { label: t('menu.refresh'), onClick: () => refreshDir(m.path) },
         'divider',
         { label: t('menu.rename'), onClick: () => onRename(m.path) },
-        { label: t('menu.delete'), danger: true, onClick: () => onDelete(m.path, 'dir') },
+        deleteItem,
       ]
     }
-    // Empty tree area (the workspace root).
+    // Empty tree area: right-clicking blank space intentionally shows no
+    // custom menu (only file/folder rows do); this branch is unreachable but
+    // kept for the type. Paste happens via Ctrl+V into the current folder.
     return [
-      { label: t('menu.newFile'), onClick: () => onNewFile(m.path) },
-      { label: t('menu.newFolder'), onClick: () => onNewFolder(m.path) },
-      'divider',
-      { label: t('menu.copyPath'), onClick: () => onCopyPath(m.path) },
-      { label: t('menu.refresh'), onClick: () => refreshDir(m.path) },
+      { label: t('menu.paste'), disabled: clipboard.items.length === 0, onClick: () => void onPaste() },
     ]
   }
 
@@ -619,6 +1078,15 @@ export function FileExplorer({
       <div className={styles.header}>
         <span className={styles.headerTitle} title={root ?? cwd}>{basenameOf(root ?? cwd)}</span>
         <span className={styles.headerActions}>
+          <button
+            type="button"
+            className={styles.action}
+            title={undoEntries.length > 0 ? `${t('action.undo')}：${undoEntries[undoEntries.length - 1].label}` : t('action.undo')}
+            disabled={undoEntries.length === 0}
+            onClick={() => void performUndo()}
+          >
+            ↩
+          </button>
           <button type="button" className={styles.action} title={t('action.theme')} onClick={toggleTheme}>
             {theme === 'dark' ? '☀' : '🌙'}
           </button>
@@ -626,18 +1094,49 @@ export function FileExplorer({
           <button type="button" className={styles.action} title={t('tab.expand')} onClick={expandPreview}>{'>'}</button>
         </span>
       </div>
+      {clipboard.items.length > 0 && (
+        <div className={styles.clipboardBar} role="status">
+          <span className={styles.clipboardText}>
+            {clipboard.mode === 'cut'
+              ? t('clipboard.cut', { count: clipboard.items.length })
+              : t('clipboard.copied', { count: clipboard.items.length })}
+            <span className={styles.clipboardHint}>{t('clipboard.pasteHint')}</span>
+          </span>
+          <button
+            type="button"
+            className={styles.action}
+            title={t('clipboard.clear')}
+            onClick={() => {
+              clearClipboard()
+              if (clipboard.mode === 'cut') setSelected({})
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div
+        ref={treeAreaRef}
+        tabIndex={0}
         className={styles.treeArea}
-        onContextMenu={(e) => {
+        onKeyDown={onTreeKeyDown}
+        onClick={(e) => {
+          // Clicking blank space deselects (Explorer behavior).
+          if (e.target === e.currentTarget) setSelected({})
+        }}
+        onDragOver={(e) => {
+          // Blank tree area also accepts a drop: move into the current folder.
+          if (dragPathsRef.current === null) return
           e.preventDefault()
-          const target = root ?? cwd
-          if (target === undefined) return
-          setMenu({ kind: 'root', path: target, x: e.clientX, y: e.clientY })
+          e.dataTransfer.dropEffect = 'move'
+        }}
+        onDrop={(e) => {
+          if (dragPathsRef.current !== null) onDropMove(e, cwd)
         }}
       >
         {rootLoading && <div className={styles.rowHint}>{t('preview.loading')}</div>}
         {rootError !== undefined && <div className={styles.rowError}>{rootError}</div>}
-        {!rootLoading && rootError === undefined && root !== undefined && children[root] !== undefined && children[root].length === 0 && (
+        {!rootLoading && rootError === undefined && root !== undefined && children[root] !== undefined && visibleEntries(children[root]).length === 0 && (
           <div className={styles.rowHint}>{t('preview.emptyDir')}</div>
         )}
         {root !== undefined && children[root] !== undefined && renderEntries(children[root], 0)}
@@ -656,7 +1155,7 @@ export function FileExplorer({
               <div
                 key={index}
                 role="menuitem"
-                className={`${styles.contextMenuItem}${item.danger ? ` ${styles.contextMenuItemDanger}` : ''}`}
+                className={`${styles.contextMenuItem}${item.danger ? ` ${styles.contextMenuItemDanger}` : ''}${item.disabled ? ` ${styles.contextMenuItemDisabled}` : ''}`}
                 onClick={() => runAction(item.onClick)}
               >
                 {item.label}

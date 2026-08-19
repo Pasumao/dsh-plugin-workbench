@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-workbench",
   "description": "VS Code-style workspace file explorer + editable preview for the dsh web GUI",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "engines": {
@@ -57,6 +57,7 @@
     "@types/react": "~18.3.1",
     "highlight.js": "^11.11.1",
     "lightningcss": "^1.32.0",
+    "markdown-it": "^15.0.0",
     "react": "^18.2.0",
     "tsdown": "0.22.14",
     "typescript": "^5.6.0"

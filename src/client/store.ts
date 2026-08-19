@@ -10,10 +10,37 @@ import { useSyncExternalStore } from 'react'
 
 export type FeTheme = 'light' | 'dark'
 
+// ---------------------------------------------------------------------------
+// Undo history (Copy / Move / Rename / New / Delete)
+//
+// One stack PER WORKSPACE, mirroring the tabs: undoing in workspace B never
+// touches workspace A's file operations. Delete is reversible by design —
+// deleting RENAMES the item into a hidden `.dsh-trash` folder next to it, and
+// undo renames it back (no bytes are ever copied). When a stack overflows the
+// oldest entry is evicted; the caller permanently purges evicted delete
+// entries' trash items so the trash folder stays bounded.
+// ---------------------------------------------------------------------------
+
+/** How many operations each workspace remembers (older ones are dropped). */
+export const UNDO_LIMIT = 30
+
+export type UndoEntry =
+  /** copy/paste (duplicate) — undo removes the copy. */
+  | { kind: 'copy'; label: string; from: string; to: string; parent: string }
+  /** cut-paste or drag-move — undo renames the item back. */
+  | { kind: 'move'; label: string; from: string; to: string; parent: string }
+  /** rename — undo renames back. */
+  | { kind: 'rename'; label: string; from: string; to: string; parent: string }
+  /** new file / new folder — undo trashes it. */
+  | { kind: 'create'; label: string; path: string; parent: string }
+  /** delete (moved into .dsh-trash) — undo renames it back. */
+  | { kind: 'delete'; label: string; path: string; trash: string; parent: string }
+
 interface PerWorkspace {
   tabs: string[]
   active: string | undefined
   collapsed: boolean
+  undo: UndoEntry[]
 }
 
 export interface TabsStateView {
@@ -24,10 +51,13 @@ export interface TabsStateView {
   wrap: boolean
   theme: FeTheme
   cwd: string | undefined
+  /** Undoable file operations, most recent last. */
+  undo: UndoEntry[]
 }
 
 const EMPTY_TABS: string[] = []
-const EMPTY_WORKSPACE: PerWorkspace = { tabs: EMPTY_TABS, active: undefined, collapsed: false }
+const EMPTY_UNDO: UndoEntry[] = []
+const EMPTY_WORKSPACE: PerWorkspace = { tabs: EMPTY_TABS, active: undefined, collapsed: false, undo: EMPTY_UNDO }
 
 const WRAP_KEY = 'dsh-plugin-workbench:wrap'
 
@@ -51,7 +81,7 @@ interface StoreState {
 
 const initialWrap = storedWrap()
 let state: StoreState = { currentCwd: undefined, workspaces: {}, theme: 'dark', wrap: initialWrap }
-let view: TabsStateView = { tabs: EMPTY_TABS, active: undefined, collapsed: false, wrap: initialWrap, theme: 'dark', cwd: undefined }
+let view: TabsStateView = { tabs: EMPTY_TABS, active: undefined, collapsed: false, wrap: initialWrap, theme: 'dark', cwd: undefined, undo: EMPTY_UNDO }
 const listeners = new Set<() => void>()
 
 function workspaceOf(cwd: string | undefined): PerWorkspace {
@@ -83,6 +113,7 @@ function commit(next: StoreState): void {
     wrap: state.wrap,
     theme: state.theme,
     cwd: state.currentCwd,
+    undo: ws.undo,
   }
   if (
     nextView.tabs === view.tabs
@@ -91,6 +122,7 @@ function commit(next: StoreState): void {
     && nextView.wrap === view.wrap
     && nextView.theme === view.theme
     && nextView.cwd === view.cwd
+    && nextView.undo === view.undo
   ) return
   view = nextView
   for (const listener of [...listeners]) listener()
@@ -203,4 +235,102 @@ export function toggleWrap(): void {
     // storage unavailable — the preference just won't persist across reloads
   }
   commit({ ...state, wrap })
+}
+
+// ---------------------------------------------------------------------------
+// File clipboard (Copy / Cut + Paste)
+//
+// Lives OUTSIDE the per-workspace records on purpose: copying in workspace A
+// and pasting into workspace B is the whole point, so the clipboard survives
+// workspace switches. Cut keeps the sources alive until a paste moves them
+// (or Escape downgrades the cut back to a copy), mirroring the OS explorer.
+// ---------------------------------------------------------------------------
+
+export type ClipboardMode = 'copy' | 'cut'
+
+export interface ClipboardItem {
+  path: string
+  name: string
+  kind: 'file' | 'dir' | 'other'
+}
+
+export interface ClipboardView {
+  items: ClipboardItem[]
+  mode: ClipboardMode
+}
+
+const EMPTY_CLIPBOARD: ClipboardView = { items: [], mode: 'copy' }
+
+let clipboard: ClipboardView = EMPTY_CLIPBOARD
+const clipboardListeners = new Set<() => void>()
+
+export function getClipboard(): ClipboardView {
+  return clipboard
+}
+
+export function subscribeClipboard(listener: () => void): () => void {
+  clipboardListeners.add(listener)
+  return () => {
+    clipboardListeners.delete(listener)
+  }
+}
+
+/** Clipboard contents shared across every workspace (Explorer semantics). */
+export function useClipboard(): ClipboardView {
+  return useSyncExternalStore(subscribeClipboard, getClipboard)
+}
+
+function commitClipboard(next: ClipboardView): void {
+  if (next === clipboard) return
+  clipboard = next
+  for (const listener of [...clipboardListeners]) listener()
+}
+
+/** Put entries on the clipboard, replacing whatever was there. */
+export function copyToClipboard(items: ClipboardItem[], mode: ClipboardMode): void {
+  if (items.length === 0) return
+  commitClipboard({ items, mode })
+}
+
+/** Drop the clipboard contents (after a cut-paste, or via the clear button). */
+export function clearClipboard(): void {
+  if (clipboard === EMPTY_CLIPBOARD) return
+  commitClipboard(EMPTY_CLIPBOARD)
+}
+
+/** Escape in the source workspace: cancel an armed cut without dropping the items. */
+export function cancelCut(): void {
+  if (clipboard.mode === 'cut') commitClipboard({ ...clipboard, mode: 'copy' })
+}
+
+// ---------------------------------------------------------------------------
+// Undo stack (see the types at the top of this file)
+// ---------------------------------------------------------------------------
+
+/**
+ * Append an operation to the current workspace's undo stack, capped at
+ * UNDO_LIMIT entries. Returns the evicted oldest entry (the caller purges its
+ * trash item when it was a delete), or undefined when nothing was evicted.
+ */
+export function pushUndo(entry: UndoEntry): UndoEntry | undefined {
+  const cwd = state.currentCwd
+  if (cwd === undefined) return undefined
+  const prev = state.workspaces[cwd] ?? EMPTY_WORKSPACE
+  const undo = [...prev.undo, entry]
+  let evicted: UndoEntry | undefined
+  if (undo.length > UNDO_LIMIT) evicted = undo.shift()
+  commit({ ...state, workspaces: { ...state.workspaces, [cwd]: { ...prev, undo } } })
+  return evicted
+}
+
+/** Remove and return the current workspace's most recent operation (or undefined). */
+export function popUndo(): UndoEntry | undefined {
+  const cwd = state.currentCwd
+  if (cwd === undefined) return undefined
+  const prev = state.workspaces[cwd] ?? EMPTY_WORKSPACE
+  if (prev.undo.length === 0) return undefined
+  const undo = [...prev.undo]
+  const entry = undo.pop()
+  commit({ ...state, workspaces: { ...state.workspaces, [cwd]: { ...prev, undo } } })
+  return entry
 }

@@ -3,8 +3,8 @@
  *
  * Registers one loopback-only generic RPC channel (`/dsh-plugin-files`) with
  * list/read/write endpoints over `ctx.fs` (the sandboxed filesystem service),
- * plus New File / New Folder / Rename / Delete for the explorer's context
- * menu. Reads pass through untouched in every sandbox mode; the context-menu
+ * plus New File / New Folder / Rename / Delete / Copy for the explorer's
+ * context menu and a `reveal` endpoint that shows an item in the OS file manager. Reads pass through untouched in every sandbox mode; the context-menu
  * mutations and the editor write are explicit user actions over the
  * loopback-only channel, run unfenced like the /api write tools — the sandbox
  * service has no mkdir/rename/rm primitives, so those use node:fs/promises
@@ -16,9 +16,21 @@
  * dsh-plugin-image-tools uses for inline chat images. The route resolves and
  * stats the path through `ctx.fs` (so sandbox containment and file-ness apply
  * exactly as for RPC reads) and only ever serves image extensions.
+ *
+ * Disk watching: the client keeps the host's watch set in sync with the open
+ * tabs via the `watch` endpoint. The host watches each file's PARENT DIRECTORY
+ * with `fs.watch` (survives atomic editor renames on Windows, unlike watching
+ * the file itself), coalesces events per path, and pushes `change` frames over
+ * a same-origin SSE route (`/dsh-plugin-files/events`) that the preview pane
+ * consumes. Writes this plugin performs itself are suppressed for a short
+ * window so a save never bounces back as a "changed on disk" event.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { mkdir, rename as renameFs, rm, writeFile as writeFileNode } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { watch as watchFs } from 'node:fs'
+import type { FSWatcher } from 'node:fs'
+import { basename, dirname } from 'node:path'
+import { mkdir, rename as renameFs, rm, cp, writeFile as writeFileNode } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
 
 export const name = 'dsh-plugin-workbench'
@@ -33,8 +45,20 @@ export const MAX_PREVIEW_BYTES = 512 * 1024
 /** Same-origin route serving raw bytes for image files (see module doc). */
 export const RAW_PREFIX = '/dsh-plugin-files/raw'
 
+/** Same-origin SSE route streaming disk-change events to the preview pane. */
+export const EVENTS_PREFIX = '/dsh-plugin-files/events'
+
 /** Images larger than this are never served to the preview (browser shows a hint). */
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
+/** Coalesce bursty editor writes into a single change notification. */
+const WATCH_DEBOUNCE_MS = 300
+
+/** Ignore fs.watch events caused by this plugin's own saves (see module doc). */
+const SELF_WRITE_WINDOW_MS = 1500
+
+/** SSE keep-alive interval (proxies may otherwise drop idle connections). */
+const SSE_HEARTBEAT_MS = 15000
 
 const IMAGE_MIME: Record<string, string> = {
   png: 'image/png',
@@ -93,7 +117,7 @@ export interface FsMutationResult {
 }
 
 export type FilesRpcOk = { ok: true; value: FsListResult | FsReadResult | FsWriteResult | FsMutationResult }
-export type FilesRpcErr = { ok: false; error: { code: 'internal'; message: string; details: Record<string, never> } }
+export type FilesRpcErr = { ok: false; error: { code: string; message: string; details: Record<string, never> } }
 export type FilesRpcResult = FilesRpcOk | FilesRpcErr
 
 /**
@@ -188,14 +212,26 @@ function pathOf(payload: unknown): string | undefined {
  * cancels the underlying fs call (or aborts between steps).
  */
 export function apply(ctx: Context): void {
+  // Per-apply watch state: created here (not module-level) so disable/reload
+  // cycles never leak watchers or SSE clients across applies.
+  const watchState: WatchState = {
+    dirs: new Map(),
+    files: new Map(),
+    selfWrites: new Map(),
+    clients: new Set(),
+  }
+
   const handler = async (endpoint: string, payload: unknown, signal: AbortSignal): Promise<FilesRpcResult> => {
     if (endpoint === 'list') return listDir(ctx, payload, signal)
     if (endpoint === 'read') return readFile(ctx, payload, signal)
-    if (endpoint === 'write') return writeFile(ctx, payload, signal)
+    if (endpoint === 'write') return writeFile(ctx, watchState, payload, signal)
+    if (endpoint === 'watch') return setWatch(ctx, watchState, payload, signal)
     if (endpoint === 'createFile') return createFile(ctx, payload, signal)
     if (endpoint === 'createDir') return createDir(ctx, payload, signal)
     if (endpoint === 'rename') return renameEntry(ctx, payload, signal)
     if (endpoint === 'delete') return deleteEntry(ctx, payload, signal)
+    if (endpoint === 'copy') return copyEntry(ctx, payload, signal)
+    if (endpoint === 'reveal') return revealInExplorer(ctx, payload, signal)
     return fail(`unknown endpoint: ${endpoint}`)
   }
   // Effect-wrapped so HMR/disable cycles dispose the channel (the connection
@@ -214,6 +250,214 @@ export function apply(ctx: Context): void {
       void serveRaw(ctx, req, res)
     },
   }), 'dsh-plugin-workbench: raw image route')
+
+  // Disk-change stream: the SSE route + heartbeat + watcher lifecycle live in
+  // one effect so disposal closes every client and every fs.watch handle.
+  ctx.effect(() => {
+    const disposeRoute = ctx.webServer.register({
+      kind: 'exact',
+      path: EVENTS_PREFIX,
+      handler: (req, res) => sseHandler(watchState, req, res),
+    })
+    const heartbeat = setInterval(() => {
+      for (const res of watchState.clients) {
+        try {
+          res.write(': ping\n\n')
+        } catch {
+          // Dropped client — removed by its own 'close' event.
+        }
+      }
+    }, SSE_HEARTBEAT_MS)
+    return () => {
+      clearInterval(heartbeat)
+      disposeRoute()
+      disposeWatch(watchState)
+    }
+  }, 'dsh-plugin-workbench: disk change stream (SSE)')
+}
+
+// ---------------------------------------------------------------------------
+// Disk watching (open-tab change detection)
+//
+// The client sends the full set of open tab paths; the host diffs it against
+// the current watcher set. Each watched file lives under an `fs.watch` on its
+// PARENT DIRECTORY (file-level handles die when editors atomic-rename, and
+// directory watching also sees deletes), events are filtered by basename,
+// coalesced per path, and pushed over the SSE route. `watch` is a pure
+// reconciliation — call it as often as you like.
+// ---------------------------------------------------------------------------
+
+/** Per-apply watch registry (see the WatchState fields inline). */
+interface WatchState {
+  /** Parent dir → its fs.watch handle and the watched basenames living in it. */
+  dirs: Map<string, { watcher: FSWatcher; basenames: Map<string, Set<string>> }>
+  /** OS path → client-facing path + pending coalescing timer. */
+  files: Map<string, { path: string; timer: ReturnType<typeof setTimeout> | undefined }>
+  /** OS path → timestamp of the plugin's own last write (self-change suppression). */
+  selfWrites: Map<string, number>
+  /** Connected SSE responses. */
+  clients: Set<ServerResponse>
+}
+
+/** Serve one SSE client connection (kept open until the browser disconnects). */
+function sseHandler(state: WatchState, req: IncomingMessage, res: ServerResponse): void {
+  if ((req.method ?? 'GET').toUpperCase() !== 'GET') {
+    res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('method not allowed')
+    return
+  }
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  })
+  res.write(': connected\n\n')
+  state.clients.add(res)
+  req.on('close', () => {
+    state.clients.delete(res)
+  })
+}
+
+/** Push one `change` frame to every connected SSE client. */
+function emitChange(state: WatchState, path: string): void {
+  const frame = `event: change\ndata: ${JSON.stringify({ path })}\n\n`
+  for (const res of state.clients) {
+    try {
+      res.write(frame)
+    } catch {
+      // Client gone — dropped from the set by its 'close' event.
+    }
+  }
+}
+
+/**
+ * Coalesce one filesystem event for an osPath into a single change
+ * notification (editors emit several events per save; the debounce collapses
+ * them). Events caused by this plugin's own saves are suppressed.
+ */
+function scheduleEmit(state: WatchState, osPath: string): void {
+  const entry = state.files.get(osPath)
+  if (entry === undefined) return
+  const selfTs = state.selfWrites.get(osPath)
+  if (selfTs !== undefined && Date.now() - selfTs < SELF_WRITE_WINDOW_MS) return
+  if (entry.timer !== undefined) clearTimeout(entry.timer)
+  entry.timer = setTimeout(() => {
+    entry.timer = undefined
+    const still = state.files.get(osPath)
+    if (still === undefined) return
+    emitChange(state, still.path)
+  }, WATCH_DEBOUNCE_MS)
+}
+
+/** Start (or extend) the parent-dir watcher covering osPath. */
+function watchDir(state: WatchState, dir: string, osPath: string): boolean {
+  let bucket = state.dirs.get(dir)
+  if (bucket === undefined) {
+    let watcher: FSWatcher
+    try {
+      watcher = watchFs(dir, { persistent: false }, (_eventType, filename) => {
+        const name = typeof filename === 'string' ? filename : undefined
+        if (name === undefined) {
+          // Platform omitted the filename: re-emit for every watched file here.
+          for (const os of state.files.keys()) {
+            if (dirname(os) === dir) scheduleEmit(state, os)
+          }
+          return
+        }
+        const bucketNow = state.dirs.get(dir)
+        const targets = bucketNow?.basenames.get(name)
+        if (targets === undefined) return
+        for (const os of targets) scheduleEmit(state, os)
+      })
+    } catch {
+      return false
+    }
+    bucket = { watcher, basenames: new Map() }
+    state.dirs.set(dir, bucket)
+  }
+  const name = basename(osPath)
+  let targets = bucket.basenames.get(name)
+  if (targets === undefined) {
+    targets = new Set()
+    bucket.basenames.set(name, targets)
+  }
+  targets.add(osPath)
+  return true
+}
+
+/** Stop watching one osPath (and its parent dir when nothing else uses it). */
+function unwatch(state: WatchState, osPath: string): void {
+  const entry = state.files.get(osPath)
+  if (entry === undefined) return
+  if (entry.timer !== undefined) clearTimeout(entry.timer)
+  state.files.delete(osPath)
+  state.selfWrites.delete(osPath)
+  const dir = dirname(osPath)
+  const bucket = state.dirs.get(dir)
+  if (bucket === undefined) return
+  const name = basename(osPath)
+  const targets = bucket.basenames.get(name)
+  if (targets !== undefined) {
+    targets.delete(osPath)
+    if (targets.size === 0) bucket.basenames.delete(name)
+  }
+  if (bucket.basenames.size === 0) {
+    bucket.watcher.close()
+    state.dirs.delete(dir)
+  }
+}
+
+/** Close every watcher, pending timer and SSE client (effect disposal). */
+function disposeWatch(state: WatchState): void {
+  for (const bucket of state.dirs.values()) bucket.watcher.close()
+  state.dirs.clear()
+  for (const entry of state.files.values()) {
+    if (entry.timer !== undefined) clearTimeout(entry.timer)
+  }
+  state.files.clear()
+  state.selfWrites.clear()
+  for (const res of state.clients) {
+    try {
+      res.end()
+    } catch {
+      // Already closed.
+    }
+  }
+  state.clients.clear()
+}
+
+/** Reconcile the watcher set with the client's open tab paths (idempotent). */
+async function setWatch(ctx: Context, state: WatchState, payload: unknown, signal: AbortSignal): Promise<FilesRpcResult> {
+  const raw = typeof payload === 'object' && payload !== null ? (payload as { paths?: unknown }).paths : undefined
+  if (!Array.isArray(raw) || raw.some((p) => typeof p !== 'string')) {
+    return fail('watch: payload.paths must be an array of strings')
+  }
+  // Resolve each requested path to its OS path. Unresolvable paths (deleted,
+  // sandboxed) are skipped; the next sync round retries them.
+  const wanted = new Map<string, string>()
+  for (const p of raw as string[]) {
+    if (signal.aborted) break
+    try {
+      const target = await ctx.fs.resolve(p, { signal })
+      const osPath = ctx.fs.processPath(target)
+      // Key by OS path, keep the client's display path for the emit.
+      wanted.set(osPath, p)
+    } catch {
+      // Not resolvable this round — drop it.
+    }
+  }
+  // Remove watchers no longer wanted.
+  for (const osPath of [...state.files.keys()]) {
+    if (!wanted.has(osPath)) unwatch(state, osPath)
+  }
+  // Start missing watchers.
+  for (const [osPath, displayPath] of wanted) {
+    if (state.files.has(osPath)) continue
+    if (!watchDir(state, dirname(osPath), osPath)) continue
+    state.files.set(osPath, { path: displayPath, timer: undefined })
+  }
+  return { ok: true, value: { path: '' } }
 }
 
 async function serveRaw(ctx: Context, req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -305,7 +549,7 @@ async function readFile(ctx: Context, payload: unknown, signal: AbortSignal): Pr
   }
 }
 
-async function writeFile(ctx: Context, payload: unknown, signal: AbortSignal): Promise<FilesRpcResult> {
+async function writeFile(ctx: Context, state: WatchState, payload: unknown, signal: AbortSignal): Promise<FilesRpcResult> {
   const path = pathOf(payload)
   const content = typeof payload === 'object' && payload !== null ? (payload as { content?: unknown }).content : undefined
   if (path === undefined) return fail('write: payload.path must be a non-empty string')
@@ -318,7 +562,18 @@ async function writeFile(ctx: Context, payload: unknown, signal: AbortSignal): P
       mode: 'danger-full-access',
       workspaceRoot: ctx.fs.processPath(target),
     })
-    return { ok: true, value: { path: ctx.fs.processPath(target), size: content.length } }
+    // This save will trip the fs.watch on the file's parent dir; suppress it
+    // so an own save never bounces back as a "changed on disk" event.
+    const osPath = ctx.fs.processPath(target)
+    state.selfWrites.set(osPath, Date.now())
+    // Prune stale markers occasionally.
+    if (state.selfWrites.size > 64) {
+      const cutoff = Date.now() - SELF_WRITE_WINDOW_MS * 4
+      for (const [os, ts] of state.selfWrites) {
+        if (ts < cutoff) state.selfWrites.delete(os)
+      }
+    }
+    return { ok: true, value: { path: osPath, size: content.length } }
   } catch (error) {
     return fail(mapError(error))
   }
@@ -396,6 +651,144 @@ async function deleteEntry(ctx: Context, payload: unknown, signal: AbortSignal):
     await rm(osPath, { recursive: info.type === 'directory', force: true })
     return { ok: true, value: { path: osPath } }
   } catch (error) {
+    return fail(mapError(error))
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Copy (the explorer's Copy / Cut + Paste)
+//
+// `fs.cp` handles files and (recursively) folders; `errorOnExist` turns a
+// colliding destination into a distinct `exists` error so the client can ask
+// the user whether to overwrite, exactly like the OS file manager. The same
+// `ctx.fs.resolve` → `processPath` resolution as every other endpoint applies,
+// so sandbox containment and error mapping stay uniform.
+// ---------------------------------------------------------------------------
+
+async function copyEntry(ctx: Context, payload: unknown, signal: AbortSignal): Promise<FilesRpcResult> {
+  // Note: the client sends `from`, not `path` (which is what pathOf reads).
+  const from = typeof payload === 'object' && payload !== null ? (payload as { from?: unknown }).from : undefined
+  const to = typeof payload === 'object' && payload !== null ? (payload as { to?: unknown }).to : undefined
+  const overwrite = typeof payload === 'object' && payload !== null && (payload as { overwrite?: unknown }).overwrite === true
+  if (typeof from !== 'string' || from.trim().length === 0) return fail('copy: payload.from must be a non-empty string')
+  if (typeof to !== 'string' || to.trim().length === 0) return fail('copy: payload.to must be a non-empty string')
+  try {
+    const fromTarget = await ctx.fs.resolve(from, { signal })
+    const fromOs = ctx.fs.processPath(fromTarget)
+    const info = await ctx.fs.stat(fromTarget, signal)
+    if (info === undefined) return fail(`path not found: ${from}`)
+    const toTarget = await ctx.fs.resolve(to, { signal })
+    const toOs = ctx.fs.processPath(toTarget)
+    // Refuse trivial self-copies and copying a folder into itself or one of
+    // its own descendants (comparisons case-insensitive — Windows).
+    const samePath = fromOs.toLowerCase() === toOs.toLowerCase()
+    if (samePath) return fail('copy: source and destination are the same path')
+    if (info.type === 'directory') {
+      const sep = fromOs.includes('\\') ? '\\' : '/'
+      const prefix = fromOs.endsWith('\\') || fromOs.endsWith('/') ? fromOs : fromOs + sep
+      if (toOs.toLowerCase().startsWith(prefix.toLowerCase())) return fail('copy: cannot copy a folder into itself')
+    }
+    await cp(fromOs, toOs, { recursive: true, force: overwrite, errorOnExist: !overwrite })
+    return { ok: true, value: { path: toOs } }
+  } catch (error) {
+    if (isFsErrorCode(error, 'ERR_FS_CP_EEXIST')) {
+      return { ok: false, error: { code: 'exists', message: 'destination already exists', details: {} } }
+    }
+    return fail(mapError(error))
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reveal in the OS file manager ("在资源管理器打开")
+//
+// Spawns the platform's file-manager command so the item shows up in the
+// system explorer — files are SELECTED inside their containing folder
+// (Windows `explorer /select,`, macOS `open -R`), folders are OPENED directly
+// (`explorer <dir>`, `open <dir>`). WSL paths are translated through
+// `wslpath` first; desktop Linux falls back to `xdg-open` (file → its parent
+// directory, folder → itself). Paths are resolved through `ctx.fs` first, so
+// the sandbox containment applies exactly as for every other endpoint; the
+// spawn itself is a local desktop action, the same trust level as the existing
+// "open in system" gesture (`ctx.workspaces.openPath`).
+// ---------------------------------------------------------------------------
+
+/** Spawn one short-lived desktop command; resolves once the process launched. */
+function runDesktop(command: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true })
+    child.once('error', reject)
+    child.once('spawn', () => {
+      // The window stays after the harness exits; nothing to wait for.
+      child.unref()
+      resolve()
+    })
+  })
+}
+
+/** Run one command and capture its stdout; rejects on non-zero exit. */
+function execCapture(command: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { windowsHide: true })
+    let out = ''
+    child.stdout.on('data', (chunk: Buffer) => {
+      out += chunk.toString()
+    })
+    child.once('error', reject)
+    child.once('close', (code) => {
+      if (code === 0) resolve(out)
+      else reject(new Error(`${command} exited with code ${code}`))
+    })
+  })
+}
+
+/** Reveal one resolved OS path in the platform's file manager. */
+async function revealNative(osPath: string, isDir: boolean, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted()
+  const platform = process.platform
+  if (platform === 'win32') {
+    // explorer returns exit code 1 when it opens a NEW window, so exit codes
+    // carry no meaning; a clean spawn is success. Files are selected in their
+    // folder; folders are opened directly.
+    await runDesktop('explorer.exe', isDir ? [osPath] : ['/select,', osPath])
+    return
+  }
+  if (platform === 'darwin') {
+    // `open -R` reveals in Finder; plain `open` opens a folder.
+    await runDesktop('open', isDir ? [osPath] : ['-R', osPath])
+    return
+  }
+  if (platform === 'linux') {
+    // WSL: translate to a Windows path and hand it to the Windows desktop.
+    const env = process.env
+    if (env.WSL_DISTRO_NAME !== undefined || env.WSL_INTEROP !== undefined) {
+      const windowsPath = (await execCapture('wslpath', ['-w', osPath])).replace(/[\r\n]+$/, '')
+      if (windowsPath === '') throw new Error('wslpath returned no Windows path')
+      await runDesktop('explorer.exe', isDir ? [windowsPath] : ['/select,', windowsPath])
+      return
+    }
+    // Desktop Linux: the default file manager opens folders; files open in
+    // their parent directory.
+    await runDesktop('xdg-open', [isDir ? osPath : dirname(osPath)])
+    return
+  }
+  throw new Error(`reveal in the file manager is unsupported on ${platform}`)
+}
+
+/** RPC endpoint: reveal one explorer path in the OS file manager. */
+async function revealInExplorer(ctx: Context, payload: unknown, signal: AbortSignal): Promise<FilesRpcResult> {
+  const path = pathOf(payload)
+  const kind = typeof payload === 'object' && payload !== null ? (payload as { kind?: unknown }).kind : undefined
+  if (path === undefined) return fail('reveal: payload.path must be a non-empty string')
+  try {
+    const target = await ctx.fs.resolve(path, { signal })
+    const info = await ctx.fs.stat(target, signal)
+    if (info === undefined) return fail(`path not found: ${path}`)
+    const isDir = kind === 'dir' || info.type === 'directory'
+    const osPath = ctx.fs.processPath(target)
+    await revealNative(osPath, isDir, signal)
+    return { ok: true, value: { path: osPath } }
+  } catch (error) {
+    if (signal.aborted) return fail('reveal: aborted')
     return fail(mapError(error))
   }
 }

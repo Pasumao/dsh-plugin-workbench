@@ -65,13 +65,18 @@ export function detectLanguage(path: string): string | undefined {
   return EXTENSION_TO_LANGUAGE[ext]
 }
 
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
+}
+
+/** True when a language id names a registered highlight.js language. */
+export function canHighlight(language: string): boolean {
+  return language !== '' && hljs.getLanguage(language) !== undefined
 }
 
 /** Highlight code for a file; returns safe HTML (code is HTML-escaped). */
@@ -82,6 +87,18 @@ export function highlightCode(code: string, path: string): string {
       return hljs.highlight(code, { language, ignoreIllegals: true }).value
     } catch {
       // fall through to plain text
+    }
+  }
+  return escapeHtml(code)
+}
+
+/** Highlight a fenced code block by its declared language; escaped plain text when unknown. */
+export function highlightFence(code: string, language: string): string {
+  if (canHighlight(language)) {
+    try {
+      return hljs.highlight(code, { language, ignoreIllegals: true }).value
+    } catch {
+      // fall through to escaped text
     }
   }
   return escapeHtml(code)

@@ -128,6 +128,12 @@
   padding: 4px;
 }
 
+/* Keyboard focus lands on the tree container (rows push focus here so
+   Ctrl+C / Ctrl+V work right after a click); no visible focus ring. */
+.treeArea:focus {
+  outline: none;
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -151,6 +157,42 @@
 
 .rowSelected .name {
   color: var(--fe-fg);
+}
+
+/* Cut items stay visible but ghosted until the paste lands (OS explorer look). */
+.rowCut {
+  opacity: 0.45;
+}
+
+/* A directory row that will receive a drag-drop move gets an accent outline. */
+.rowDropTarget {
+  box-shadow: inset 0 0 0 1.5px var(--fe-accent);
+  background: var(--fe-selection);
+}
+
+/* ---- Clipboard status bar (Copy / Cut + Paste) ---- */
+.clipboardBar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--fe-border);
+  background: var(--fe-hover);
+  color: var(--fe-fg);
+  font-size: 12px;
+}
+
+.clipboardText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clipboardHint {
+  color: var(--fe-faint);
 }
 
 .chevron {
@@ -275,6 +317,12 @@
 
 .contextMenuItemDanger {
   color: #f48771 !important;
+}
+
+.contextMenuItemDisabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
 }
 
 .contextMenuDivider {
@@ -457,6 +505,31 @@
   opacity: 0.85;
 }
 
+/* Disk-changed badge: the file changed on disk while this tab holds unsaved
+   edits; click to reload and discard them. */
+.tabDiskBadge {
+  flex: none;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fe-accent);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.tabDiskBadge:hover {
+  background: var(--fe-hover);
+  color: var(--fe-fg);
+}
+
 .previewBody {
   flex: 1;
   min-height: 0;
@@ -637,6 +710,212 @@
 .previewMeta {
   color: var(--fe-faint);
   font-size: 11px;
+}
+
+/* ---- Markdown rendered preview ---- */
+.mdPreview {
+  box-sizing: border-box;
+  height: 100%;
+  overflow: auto;
+  padding: 16px 20px 48px;
+  color: var(--fe-fg);
+  font-size: 14px;
+  line-height: 1.7;
+  word-wrap: break-word;
+}
+
+.mdPreview > :first-child {
+  margin-top: 0;
+}
+
+.mdPreview > :last-child {
+  margin-bottom: 0;
+}
+
+.mdPreview h1,
+.mdPreview h2,
+.mdPreview h3,
+.mdPreview h4,
+.mdPreview h5,
+.mdPreview h6 {
+  margin: 1.2em 0 0.5em;
+  line-height: 1.3;
+  font-weight: 600;
+  color: var(--fe-fg);
+}
+
+.mdPreview h1 {
+  font-size: 1.7em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--fe-border);
+}
+
+.mdPreview h2 {
+  font-size: 1.4em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--fe-border);
+}
+
+.mdPreview h3 {
+  font-size: 1.2em;
+}
+
+.mdPreview h4,
+.mdPreview h5,
+.mdPreview h6 {
+  font-size: 1.05em;
+}
+
+.mdPreview p {
+  margin: 0.6em 0;
+}
+
+.mdPreview ul,
+.mdPreview ol {
+  margin: 0.6em 0;
+  padding-left: 1.6em;
+}
+
+.mdPreview li {
+  margin: 0.2em 0;
+}
+
+.mdPreview li > ul,
+.mdPreview li > ol {
+  margin: 0.2em 0;
+}
+
+.mdPreview a {
+  color: var(--fe-accent);
+  text-decoration: none;
+}
+
+.mdPreview a:hover {
+  text-decoration: underline;
+}
+
+.mdPreview blockquote {
+  margin: 0.8em 0;
+  padding: 0.3em 1em;
+  border-left: 3px solid var(--fe-border-strong);
+  color: var(--fe-muted);
+  background: var(--fe-sidebar-bg);
+}
+
+.mdPreview code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  background: var(--fe-hover);
+  padding: 0.15em 0.4em;
+  border-radius: 3px;
+}
+
+.mdPreview pre {
+  margin: 0.8em 0;
+  padding: 12px;
+  overflow: auto;
+  background: var(--fe-sidebar-bg);
+  border: 1px solid var(--fe-border);
+  border-radius: 4px;
+  line-height: 1.5;
+}
+
+.mdPreview pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 13px;
+}
+
+.mdPreview table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.mdPreview th,
+.mdPreview td {
+  border: 1px solid var(--fe-border-strong);
+  padding: 6px 12px;
+}
+
+.mdPreview th {
+  background: var(--fe-sidebar-bg);
+  font-weight: 600;
+}
+
+.mdPreview img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+.mdPreview hr {
+  border: none;
+  border-top: 1px solid var(--fe-border-strong);
+  margin: 1.5em 0;
+}
+
+/* Fenced code blocks reuse the same token palette as the overlay editor. */
+.mdPreview :global(.hljs-keyword),
+.mdPreview :global(.hljs-selector-tag),
+.mdPreview :global(.hljs-literal) {
+  color: var(--fe-token-keyword);
+}
+
+.mdPreview :global(.hljs-string),
+.mdPreview :global(.hljs-regexp),
+.mdPreview :global(.hljs-addition) {
+  color: var(--fe-token-string);
+}
+
+.mdPreview :global(.hljs-comment),
+.mdPreview :global(.hljs-quote) {
+  color: var(--fe-token-comment);
+  font-style: italic;
+}
+
+.mdPreview :global(.hljs-number),
+.mdPreview :global(.hljs-symbol),
+.mdPreview :global(.hljs-bullet) {
+  color: var(--fe-token-number);
+}
+
+.mdPreview :global(.hljs-title),
+.mdPreview :global(.hljs-section),
+.mdPreview :global(.hljs-title.function_) {
+  color: var(--fe-token-function);
+}
+
+.mdPreview :global(.hljs-type),
+.mdPreview :global(.hljs-built_in),
+.mdPreview :global(.hljs-class .hljs-title) {
+  color: var(--fe-token-type);
+}
+
+.mdPreview :global(.hljs-attr),
+.mdPreview :global(.hljs-attribute),
+.mdPreview :global(.hljs-variable),
+.mdPreview :global(.hljs-template-variable),
+.mdPreview :global(.hljs-params) {
+  color: var(--fe-token-variable);
+}
+
+.mdPreview :global(.hljs-tag),
+.mdPreview :global(.hljs-name) {
+  color: var(--fe-token-tag);
+}
+
+.mdPreview :global(.hljs-meta) {
+  color: var(--fe-token-meta);
+}
+
+.mdPreview :global(.hljs-emphasis) {
+  font-style: italic;
+}
+
+.mdPreview :global(.hljs-strong) {
+  font-weight: 600;
 }
 
 .placeholder {
