@@ -4,6 +4,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.0.7] - 2026-08-19
+
+### Fixed
+
+- **跨工作区粘贴（复制冲突）不再报 Zod 校验错误**：复制/粘贴遇到目标已存在时，
+  host 端此前返回自定义错误码 `code: 'exists'`，而通用 RPC 通道的错误体受核心
+  封闭错误码联合校验（`rpcErrorSchema`）约束，客户端解析直接抛 `invalid_union`，
+  覆盖确认对话框根本不会出现。现改为在**成功值**中返回 `exists: true` 标志
+  （OS 文件管理器语义），客户端据此询问是否覆盖，行为不变、报错消除
+
 ## [0.0.6] - 2026-08-19
 
 ### Added

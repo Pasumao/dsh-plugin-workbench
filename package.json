@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-workbench",
   "description": "VS Code-style workspace file explorer + editable preview for the dsh web GUI",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "engines": {
@@ -68,6 +68,7 @@
     "cordis.patch.yml",
     "src",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "LICENSE"
   ]
 }

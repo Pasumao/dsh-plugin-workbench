@@ -34,6 +34,8 @@ export interface FsReadResult {
 /** Result of a context-menu mutation (create/rename/delete). */
 export interface FsMutationResult {
   path: string
+  /** Copy-only: `true` when the destination existed and the copy was skipped (client may ask about overwrite). */
+  exists?: boolean
 }
 
 interface SessionSummary {
@@ -588,10 +590,9 @@ export function FileExplorer({
       if (sameDest) dest = joinPath(targetDir, copyName(item.name))
       let overwritten = false
       try {
-        try {
-          await copyPath(item.path, dest, false)
-        } catch (error) {
-          if ((error as { code?: string }).code !== 'exists') throw error
+        const copied = await copyPath(item.path, dest, false)
+        if (copied.exists === true) {
+          // Collision: ask before overwriting, like the OS file manager.
           if (!window.confirm(t('confirm.overwrite', { name: item.name }))) continue
           overwritten = true
           await copyPath(item.path, dest, true)

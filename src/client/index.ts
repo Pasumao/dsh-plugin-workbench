@@ -52,7 +52,7 @@ interface RpcFailure {
   error: { code: string; message: string }
 }
 
-/** Error carrying the host's machine-readable `code` (e.g. 'exists' on copy collision). */
+/** Error carrying the host's machine-readable `code` (always a core union code; copy collisions are reported in the value instead). */
 export interface RpcError extends Error {
   code?: string
 }

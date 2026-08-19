@@ -114,6 +114,13 @@ export interface FsWriteResult {
 /** Result of a context-menu mutation (create/rename/delete). */
 export interface FsMutationResult {
   path: string
+  /**
+   * Copy-only: `true` when the destination already existed and the copy was
+   * skipped (overwrite was false). Reported in the SUCCESS value — the generic
+   * RPC channel validates error bodies against the core's closed error-code
+   * union, so a custom error code like 'exists' would fail client-side parsing.
+   */
+  exists?: boolean
 }
 
 export type FilesRpcOk = { ok: true; value: FsListResult | FsReadResult | FsWriteResult | FsMutationResult }
@@ -659,10 +666,13 @@ async function deleteEntry(ctx: Context, payload: unknown, signal: AbortSignal):
 // Copy (the explorer's Copy / Cut + Paste)
 //
 // `fs.cp` handles files and (recursively) folders; `errorOnExist` turns a
-// colliding destination into a distinct `exists` error so the client can ask
-// the user whether to overwrite, exactly like the OS file manager. The same
-// `ctx.fs.resolve` → `processPath` resolution as every other endpoint applies,
-// so sandbox containment and error mapping stay uniform.
+// colliding destination into an `ERR_FS_CP_EEXIST` throw, which is reported as
+// a SUCCESS with `exists: true` so the client can ask the user whether to
+// overwrite, exactly like the OS file manager. The same `ctx.fs.resolve` →
+// `processPath` resolution as every other endpoint applies, so sandbox
+// containment and error mapping stay uniform. (Reported in the value, never as
+// an error body: generic-channel errors must use the core's closed error-code
+// union, and a custom code there would fail the client-side response parse.)
 // ---------------------------------------------------------------------------
 
 async function copyEntry(ctx: Context, payload: unknown, signal: AbortSignal): Promise<FilesRpcResult> {
@@ -672,13 +682,14 @@ async function copyEntry(ctx: Context, payload: unknown, signal: AbortSignal): P
   const overwrite = typeof payload === 'object' && payload !== null && (payload as { overwrite?: unknown }).overwrite === true
   if (typeof from !== 'string' || from.trim().length === 0) return fail('copy: payload.from must be a non-empty string')
   if (typeof to !== 'string' || to.trim().length === 0) return fail('copy: payload.to must be a non-empty string')
+  let toOs = ''
   try {
     const fromTarget = await ctx.fs.resolve(from, { signal })
     const fromOs = ctx.fs.processPath(fromTarget)
     const info = await ctx.fs.stat(fromTarget, signal)
     if (info === undefined) return fail(`path not found: ${from}`)
     const toTarget = await ctx.fs.resolve(to, { signal })
-    const toOs = ctx.fs.processPath(toTarget)
+    toOs = ctx.fs.processPath(toTarget)
     // Refuse trivial self-copies and copying a folder into itself or one of
     // its own descendants (comparisons case-insensitive — Windows).
     const samePath = fromOs.toLowerCase() === toOs.toLowerCase()
@@ -692,7 +703,9 @@ async function copyEntry(ctx: Context, payload: unknown, signal: AbortSignal): P
     return { ok: true, value: { path: toOs } }
   } catch (error) {
     if (isFsErrorCode(error, 'ERR_FS_CP_EEXIST')) {
-      return { ok: false, error: { code: 'exists', message: 'destination already exists', details: {} } }
+      // Destination already exists and overwrite was not requested: report the
+      // collision as a successful no-op so the client can ask about overwrite.
+      return { ok: true, value: { path: toOs, exists: true } }
     }
     return fail(mapError(error))
   }
