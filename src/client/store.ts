@@ -140,6 +140,31 @@ export function activateFile(path: string): void {
   updateCurrent((ws) => (ws.active === path || !ws.tabs.includes(path) ? ws : { ...ws, active: path }))
 }
 
+/** Point any open tab at a new path after a rename (the disk path changed). */
+export function retargetFile(oldPath: string, newPath: string): void {
+  updateCurrent((ws) => {
+    if (!ws.tabs.includes(oldPath)) return ws
+    const tabs = ws.tabs.map((t) => (t === oldPath ? newPath : t))
+    return { ...ws, tabs, active: ws.active === oldPath ? newPath : ws.active }
+  })
+}
+
+/** Close every open tab at or under a path (used after deleting it). */
+export function closeFilesUnder(path: string): void {
+  updateCurrent((ws) => {
+    const sep = path.includes('\\') ? '\\' : '/'
+    const prefix = path.endsWith('\\') || path.endsWith('/') ? path : path + sep
+    const kept = ws.tabs.filter((t) => t !== path && !t.startsWith(prefix))
+    if (kept.length === ws.tabs.length) return ws
+    let active = ws.active
+    if (active !== undefined && (active === path || active.startsWith(prefix))) {
+      const index = ws.tabs.indexOf(active)
+      active = kept[Math.min(index, kept.length - 1)]
+    }
+    return { ...ws, tabs: kept, active }
+  })
+}
+
 /** Move a tab before another tab (drag-to-reorder). */
 export function moveTab(dragged: string, target: string): void {
   updateCurrent((ws) => {

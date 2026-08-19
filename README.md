@@ -1,13 +1,15 @@
 # dsh-plugin-workbench
 
+![npm version](https://img.shields.io/npm/v/dsh-plugin-workbench)
 ![License](https://img.shields.io/github/license/Pasumao/dsh-plugin-workbench)
 ![CI](https://img.shields.io/github/actions/workflow/status/Pasumao/dsh-plugin-workbench/ci.yml?branch=main)
-![Node](https://img.shields.io/badge/node-%3E%3D18-339933)
 ![Stars](https://img.shields.io/github/stars/Pasumao/dsh-plugin-workbench?style=social)
-![AI Assisted](https://img.shields.io/badge/AI-Assisted-8A2BE2)
 
-DSH Web GUI 的 VS Code 风格文件浏览器插件：文件树 + 可编辑代码预览
-（语法高亮、标签页），每个工作区独立保存状态。**需要布局补丁**（见下）。
+**能直接改文件的 VS Code 风格工作台**——不是只读预览：文件树 + 可编辑代码预览
+（语法高亮、标签页、行号栏）+ 右键文件操作（新建 / 重命名 / 删除 / 在系统中打开）+
+图片内联预览，每个工作区独立保存状态。装上之后，DSH 网页就是一个轻量代码编辑器。
+
+> ⚠️ 安装需打一个布局补丁（见下），补丁针对 `dsh-client-ui-layout@0.1.0-rc.6` 编写。
 
 ## 功能
 
@@ -15,6 +17,10 @@ DSH Web GUI 的 VS Code 风格文件浏览器插件：文件树 + 可编辑代�
 - 文件图标：常见格式显示着色徽章（代码）/ emoji（图片、音视频、压缩包等），目录展开/收起区分
 - 可编辑预览：透明 textarea 叠加语法高亮，`Ctrl+S`/`Cmd+S` 保存；
   md/.txt 等散文格式与超大代码文件自动降级为纯文本编辑，加载快、不卡界面
+- **行号栏**：编辑器左侧逻辑行号，与文本滚动锁定对齐（纯文本/高亮模式均生效）
+- **图片预览**：png/jpg/gif/webp/avif/svg 等直接内联渲染（同源字节路由，20MB 上限）
+- **右键菜单**（VS Code 风格）：文件/文件夹/空白区域均可右键——
+  新建文件、新建文件夹、重命名、删除（递归带确认）、复制路径、刷新、在系统中打开
 - 自动换行：标签栏一键切换软换行（仅显示层换行，不改动文件内容）或长行横向滚动，偏好持久化
 - 标签页：多文件、拖拽排序、收起/弹出；亮暗主题一键切换
 - 语法高亮：highlight.js（JS/TS、Python、JSON、HTML、CSS、Shell 等；Markdown 以纯文本显示）
@@ -54,7 +60,10 @@ dsh plugin --profile web remove dsh-plugin-workbench
 
 ## 说明
 
-- `/dsh-plugin-files` RPC 通道仅限 loopback；写操作显式以 `danger-full-access` 执行
+- `/dsh-plugin-files` RPC 通道仅限 loopback；写操作显式以 `danger-full-access` 执行；
+  右键菜单的新建/重命名/删除同样经该通道（loopback 信任，与编辑器保存一致）
+- 图片预览走同源路由 `/dsh-plugin-files/raw/<path>`：仅响应图片扩展名，
+  先经 `ctx.fs.resolve → stat`（沙箱一致的路径解析）再读取字节，20MB 上限
 - DSH 升级会覆盖布局 bundle，需重新运行补丁脚本；锚点失效时更新 `scripts/patch-layout.mjs`
 - 本仓库不包含 DSH 编译产物
 

@@ -55,8 +55,17 @@ declare module '@deepseek-ai/cordis' {
       stat(target: unknown, signal?: AbortSignal): Promise<{ version: unknown; type: 'file' | 'directory' | 'other'; size?: number } | undefined>
       listDir(target: unknown, signal?: AbortSignal): Promise<Array<{ name: string; type: 'file' | 'directory' | 'other'; target: unknown; version?: unknown; size?: number }>>
       readText(target: unknown, signal?: AbortSignal): Promise<string>
+      readBytes(target: unknown, signal: AbortSignal | undefined, maxBytes: number): Promise<Uint8Array>
       writeText(target: unknown, content: string, version?: unknown, signal?: AbortSignal, options?: { mode?: string; workspaceRoot?: string }): Promise<void>
       processPath(target: unknown): string
+    }
+    webServer: {
+      /** Register a named HTTP route (exact path or prefix). Returns the disposer. */
+      register(route: {
+        kind: 'exact' | 'prefix'
+        path: string
+        handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void | Promise<void>
+      }): () => void
     }
   }
 }

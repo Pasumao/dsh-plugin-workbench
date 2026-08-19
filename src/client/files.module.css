@@ -235,6 +235,54 @@
   padding: 2px 8px 2px 0;
 }
 
+/* ---- Right-click context menu (VS Code-style) ---- */
+/* The maid-atelier skin styles every [role='menu'] with its own palette —
+   `color` follows the PAGE theme there, while our background follows the
+   WORKBENCH theme. When the two disagree (page dark + workbench light or
+   vice versa) the skin's higher-specificity color would paint menu text in a
+   shade that matches our background, making it unreadable. Lock the menu's
+   own colors to the workbench tokens so text always contrasts its bg. */
+.contextMenu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 180px;
+  padding: 4px;
+  box-sizing: border-box;
+  border: 1px solid var(--fe-border-strong);
+  border-radius: 6px;
+  background: var(--fe-bg) !important;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+  font-size: 13px;
+  color: var(--fe-fg) !important;
+  user-select: none;
+}
+
+.contextMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: inherit;
+}
+
+.contextMenuItem:hover {
+  background: var(--fe-selection) !important;
+  color: var(--fe-fg) !important;
+}
+
+.contextMenuItemDanger {
+  color: #f48771 !important;
+}
+
+.contextMenuDivider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--fe-border);
+}
+
 /* ---- Split preview + tabs ---- */
 .preview {
   flex: 0 0 55%;
@@ -420,9 +468,37 @@
   position: relative;
   height: 100%;
   min-height: 0;
+  /* Line-number gutter width; the textarea and highlight layers shift past it. */
+  --fe-gutter: 44px;
   /* Keep layout/paint churn local to the editor: huge wrapped content must
      not invalidate the whole page on every edit or scroll. */
   contain: layout paint;
+}
+
+/* Line-number gutter: a fixed column on the left that scrolls in lockstep
+   with the editor text (scrollTop synced from the textarea every frame). */
+.gutter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--fe-gutter);
+  box-sizing: border-box;
+  overflow: hidden;
+  border-right: 1px solid var(--fe-border);
+  background: var(--fe-sidebar-bg);
+  color: var(--fe-faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  user-select: none;
+  pointer-events: none;
+}
+
+.gutterNumbers {
+  padding: 12px 8px;
+  white-space: pre;
+  text-align: right;
 }
 
 /* Plain (no-overlay) editor: the textarea itself renders the visible text —
@@ -435,7 +511,7 @@
 /* Large-file notice chip: syntax highlight was dropped to stay responsive. */
 .editorHint {
   position: absolute;
-  left: 8px;
+  left: calc(var(--fe-gutter) + 8px);
   bottom: 8px;
   padding: 4px 10px;
   border-radius: 4px;
@@ -447,7 +523,10 @@
 
 .editorHighlight {
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  left: var(--fe-gutter);
+  right: 0;
   margin: 0;
   padding: 12px;
   /* The textarea reserves one extra line at the bottom (its caret reserve),
@@ -479,7 +558,10 @@
 
 .editorTextarea {
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  left: var(--fe-gutter);
+  right: 0;
   box-sizing: border-box;
   margin: 0;
   padding: 12px;
@@ -525,6 +607,31 @@
   color: var(--fe-faint);
   font-size: 12px;
   line-height: 18px;
+}
+
+/* Image preview: raw bytes arrive from the plugin's same-origin route. The
+   viewer centers the picture and shrinks it to fit the pane, letting the
+   body scroll when the file is larger than the available space. */
+.imageView {
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  overflow: auto;
+  background: var(--fe-bg);
+}
+
+.image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px var(--fe-border);
 }
 
 .previewMeta {

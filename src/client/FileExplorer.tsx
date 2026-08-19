@@ -3,11 +3,12 @@
  * (patched) ui-layout AppFrame. File selection is pushed into the shared
  * selection store so the `explorer.preview` slot can render the split view.
  */
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import styles from './files.module.css'
 import { FileIcon } from './fileIcons'
 import type { FilesKey } from './locales'
-import { expandPreview, openFile, setCwd, toggleTheme, useTabsState } from './store'
+import { closeFilesUnder, expandPreview, openFile, retargetFile, setCwd, toggleTheme, useTabsState } from './store'
 
 export interface FsListEntry {
   name: string
@@ -29,6 +30,11 @@ export interface FsReadResult {
   truncated: boolean
 }
 
+/** Result of a context-menu mutation (create/rename/delete). */
+export interface FsMutationResult {
+  path: string
+}
+
 interface SessionSummary {
   id: string
   cwd?: string
@@ -45,12 +51,28 @@ export interface FileExplorerProps {
   t: (key: FilesKey, params?: Record<string, unknown>) => string
   listDir: (path: string, signal?: AbortSignal) => Promise<FsListResult>
   openPath: (path: string) => Promise<void>
+  createFile: (path: string, signal?: AbortSignal) => Promise<FsMutationResult>
+  createDir: (path: string, signal?: AbortSignal) => Promise<FsMutationResult>
+  renameFile: (path: string, to: string, signal?: AbortSignal) => Promise<FsMutationResult>
+  removePath: (path: string, signal?: AbortSignal) => Promise<FsMutationResult>
 }
 
 function basenameOf(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, '')
   const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
   return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
+}
+
+/** Parent directory of a path ('' for a bare drive root — never used for such). */
+function parentOf(path: string): string {
+  const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return idx > 0 ? path.slice(0, idx) : path
+}
+
+/** Append a child name to a directory path, honoring its separator style. */
+function joinPath(dir: string, name: string): string {
+  const sep = dir.includes('\\') ? '\\' : '/'
+  return dir.endsWith('\\') || dir.endsWith('/') ? dir + name : dir + sep + name
 }
 
 function formatSize(bytes: number): string {
@@ -91,6 +113,7 @@ interface TreeRowProps {
   onSelect: (entry: FsListEntry) => void
   onDoubleClick: (entry: FsListEntry) => void
   onOpenExternal: (path: string) => Promise<void>
+  onContextMenu: (e: ReactMouseEvent, entry: FsListEntry) => void
   t: (key: FilesKey, params?: Record<string, unknown>) => string
 }
 
@@ -110,6 +133,7 @@ const TreeRow = memo(function TreeRow({
   onSelect,
   onDoubleClick,
   onOpenExternal,
+  onContextMenu,
   t,
 }: TreeRowProps) {
   const isDir = entry.kind === 'dir'
@@ -119,6 +143,7 @@ const TreeRow = memo(function TreeRow({
       style={{ paddingLeft: 8 + depth * 14 }}
       onClick={() => onSelect(entry)}
       onDoubleClick={() => onDoubleClick(entry)}
+      onContextMenu={(e) => onContextMenu(e, entry)}
       role="treeitem"
       aria-selected={isActive}
       aria-expanded={isDir ? isExpanded : undefined}
@@ -170,7 +195,17 @@ const TreeRow = memo(function TreeRow({
   )
 })
 
-export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileExplorerProps) {
+export function FileExplorer({
+  width,
+  useSessions,
+  t,
+  listDir,
+  openPath,
+  createFile,
+  createDir,
+  renameFile,
+  removePath,
+}: FileExplorerProps) {
   const sessionList = useSessions((s) => s)
   const currentId = sessionList.current
   const cwd = currentId !== undefined ? sessionList.byId[currentId]?.cwd : undefined
@@ -189,6 +224,57 @@ export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileE
   const [children, setChildren] = useState<Record<string, FsListEntry[]>>({})
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set())
   const [dirErrors, setDirErrors] = useState<Record<string, string>>({})
+
+  // ---- context menu ----
+  interface MenuState {
+    kind: 'file' | 'dir' | 'root'
+    path: string
+    x: number
+    y: number
+  }
+  const [menu, setMenu] = useState<MenuState | undefined>(undefined)
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | undefined>(undefined)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  // Measure and clamp the menu into the viewport before the browser paints
+  // (layout effects run pre-paint, so the raw position never shows).
+  useLayoutEffect(() => {
+    if (menu === undefined) {
+      setMenuPos(undefined)
+      return
+    }
+    const el = menuRef.current
+    if (el === null) return
+    const rect = el.getBoundingClientRect()
+    setMenuPos({
+      x: Math.max(4, Math.min(menu.x, window.innerWidth - rect.width - 4)),
+      y: Math.max(4, Math.min(menu.y, window.innerHeight - rect.height - 4)),
+    })
+  }, [menu])
+
+  // Close the menu on outside click / Escape / window blur.
+  useEffect(() => {
+    if (menu === undefined) return undefined
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenu(undefined)
+    }
+    const onMouseDown = (e: MouseEvent) => {
+      const el = menuRef.current
+      if (el !== null && e.target instanceof Node && el.contains(e.target)) return
+      setMenu(undefined)
+    }
+    const onBlur = () => setMenu(undefined)
+    document.addEventListener('keydown', onKeyDown)
+    // mousedown (not click): closing before a menu item's click still lets the
+    // click dispatch on the item, and closes when clicking anywhere else.
+    document.addEventListener('mousedown', onMouseDown)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('mousedown', onMouseDown)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [menu])
 
   // Latest tree snapshot for the polling tick (avoids stale closures).
   const treeRef = useRef({ root, children, expanded, rootLoading })
@@ -358,6 +444,81 @@ export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileE
     void loadDir(dirPath)
   }, [loadDir])
 
+  // ---- context-menu actions ----
+
+  const openContextMenu = useCallback((e: ReactMouseEvent, entry: FsListEntry) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setMenu({ kind: entry.kind === 'dir' ? 'dir' : 'file', path: entry.path, x: e.clientX, y: e.clientY })
+  }, [])
+
+  const runAction = useCallback((action: () => void) => {
+    setMenu(undefined)
+    action()
+  }, [])
+
+  // One mutation pipeline shared by New File / New Folder / Rename / Delete:
+  // run the op, refresh the touched directory, and surface failures inline in
+  // the tree (under the directory row, or at the column top for the root).
+  const applyMutation = useCallback(async (op: () => Promise<unknown>, refreshPath: string) => {
+    try {
+      await op()
+      refreshDir(refreshPath)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (refreshPath === root) setRootError(message)
+      else setDirErrors((prev) => ({ ...prev, [refreshPath]: message }))
+    }
+  }, [refreshDir, root])
+
+  const onNewFile = useCallback((dirPath: string) => {
+    const name = window.prompt(`${t('prompt.newFileName')}:`, '')
+    if (name === null) return
+    const trimmed = name.trim()
+    if (trimmed === '') return
+    void applyMutation(() => createFile(joinPath(dirPath, trimmed)), dirPath)
+  }, [applyMutation, createFile, t])
+
+  const onNewFolder = useCallback((dirPath: string) => {
+    const name = window.prompt(`${t('prompt.newFolderName')}:`, '')
+    if (name === null) return
+    const trimmed = name.trim()
+    if (trimmed === '') return
+    void applyMutation(() => createDir(joinPath(dirPath, trimmed)), dirPath)
+  }, [applyMutation, createDir, t])
+
+  const onRename = useCallback((path: string) => {
+    const current = basenameOf(path)
+    const name = window.prompt(`${t('prompt.renameTo')}:`, current)
+    if (name === null) return
+    const trimmed = name.trim()
+    if (trimmed === '' || trimmed === current) return
+    const parent = parentOf(path)
+    const to = joinPath(parent, trimmed)
+    void applyMutation(async () => {
+      await renameFile(path, to)
+      // Keep any open tab pointing at the moved file.
+      retargetFile(path, to)
+    }, parent)
+  }, [applyMutation, renameFile, t])
+
+  const onDelete = useCallback((path: string, kind: 'file' | 'dir') => {
+    const name = basenameOf(path)
+    const message = kind === 'dir' ? t('confirm.deleteDir', { name }) : t('confirm.deleteFile', { name })
+    if (!window.confirm(message)) return
+    void applyMutation(async () => {
+      await removePath(path)
+      // Drop tabs for the deleted file (or everything under a deleted folder).
+      closeFilesUnder(path)
+    }, parentOf(path))
+  }, [applyMutation, removePath, t])
+
+  const onCopyPath = useCallback((path: string) => {
+    void navigator.clipboard.writeText(path).catch(() => {
+      // clipboard unavailable (permissions) — nothing else to do
+    })
+  }, [])
+
   const onRowClick = useCallback((entry: FsListEntry) => {
     if (entry.kind === 'dir') {
       toggleDir(entry.path)
@@ -401,6 +562,7 @@ export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileE
           onSelect={onRowClick}
           onDoubleClick={onRowDoubleClick}
           onOpenExternal={openPath}
+          onContextMenu={openContextMenu}
           t={t}
         />
         {isDir && isExpanded && (
@@ -417,6 +579,41 @@ export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileE
     )
   })
 
+  const menuItems = (m: MenuState): Array<{ label: string; danger?: boolean; onClick: () => void } | 'divider'> => {
+    if (m.kind === 'file') {
+      return [
+        { label: t('menu.open'), onClick: () => openFile(m.path) },
+        'divider',
+        { label: t('menu.copyPath'), onClick: () => onCopyPath(m.path) },
+        { label: t('menu.openSystem'), onClick: () => void openPath(m.path) },
+        'divider',
+        { label: t('menu.rename'), onClick: () => onRename(m.path) },
+        { label: t('menu.delete'), danger: true, onClick: () => onDelete(m.path, 'file') },
+      ]
+    }
+    if (m.kind === 'dir') {
+      return [
+        { label: t('menu.newFile'), onClick: () => onNewFile(m.path) },
+        { label: t('menu.newFolder'), onClick: () => onNewFolder(m.path) },
+        'divider',
+        { label: t('menu.copyPath'), onClick: () => onCopyPath(m.path) },
+        { label: t('menu.openSystem'), onClick: () => void openPath(m.path) },
+        { label: t('menu.refresh'), onClick: () => refreshDir(m.path) },
+        'divider',
+        { label: t('menu.rename'), onClick: () => onRename(m.path) },
+        { label: t('menu.delete'), danger: true, onClick: () => onDelete(m.path, 'dir') },
+      ]
+    }
+    // Empty tree area (the workspace root).
+    return [
+      { label: t('menu.newFile'), onClick: () => onNewFile(m.path) },
+      { label: t('menu.newFolder'), onClick: () => onNewFolder(m.path) },
+      'divider',
+      { label: t('menu.copyPath'), onClick: () => onCopyPath(m.path) },
+      { label: t('menu.refresh'), onClick: () => refreshDir(m.path) },
+    ]
+  }
+
   return (
     <div className={styles.column} style={{ width: width > 0 ? width : undefined }} data-pane="explorer" data-fe-theme={theme}>
       <div className={styles.header}>
@@ -429,7 +626,15 @@ export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileE
           <button type="button" className={styles.action} title={t('tab.expand')} onClick={expandPreview}>{'>'}</button>
         </span>
       </div>
-      <div className={styles.treeArea}>
+      <div
+        className={styles.treeArea}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          const target = root ?? cwd
+          if (target === undefined) return
+          setMenu({ kind: 'root', path: target, x: e.clientX, y: e.clientY })
+        }}
+      >
         {rootLoading && <div className={styles.rowHint}>{t('preview.loading')}</div>}
         {rootError !== undefined && <div className={styles.rowError}>{rootError}</div>}
         {!rootLoading && rootError === undefined && root !== undefined && children[root] !== undefined && children[root].length === 0 && (
@@ -437,6 +642,29 @@ export function FileExplorer({ width, useSessions, t, listDir, openPath }: FileE
         )}
         {root !== undefined && children[root] !== undefined && renderEntries(children[root], 0)}
       </div>
+      {menu !== undefined && (
+        <div
+          ref={menuRef}
+          className={styles.contextMenu}
+          role="menu"
+          style={menuPos !== undefined ? { left: menuPos.x, top: menuPos.y } : { left: menu.x, top: menu.y, visibility: 'hidden' }}
+        >
+          {menuItems(menu).map((item, index) =>
+            item === 'divider' ? (
+              <div key={index} className={styles.contextMenuDivider} />
+            ) : (
+              <div
+                key={index}
+                role="menuitem"
+                className={`${styles.contextMenuItem}${item.danger ? ` ${styles.contextMenuItemDanger}` : ''}`}
+                onClick={() => runAction(item.onClick)}
+              >
+                {item.label}
+              </div>
+            ),
+          )}
+        </div>
+      )}
     </div>
   )
 }

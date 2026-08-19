@@ -4,6 +4,40 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+## [0.0.5] - 2026-08-17
+
+### Added
+
+- **图片预览**：打开 png/jpg/jpeg/gif/webp/avif/bmp/ico/svg 直接在预览栏渲染，
+  不再显示「二进制文件」提示。字节经同源路由 `/dsh-plugin-files/raw/<path>`
+  提供：宿主先经 `ctx.fs.resolve → stat`（沙箱一致的路径解析）再读字节，
+  仅限图片扩展名、20MB 上限；加载失败显示内联提示，切换标签自动复位
+- **编辑器行号栏**：左侧逻辑行号（VS Code 风格，软换行下仍按源行编号），
+  与编辑区滚动逐帧锁定对齐；纯文本模式（md/txt/大文件）同样生效
+- **右键菜单（VS Code 风格）**：
+  - 文件：打开预览 / 复制路径 / 在系统中打开 / 重命名 / 删除
+  - 文件夹：新建文件 / 新建文件夹 / 复制路径 / 在系统中打开 / 刷新 /
+    重命名 / 删除（递归删除带确认）
+  - 空白区域：新建文件 / 新建文件夹 / 复制路径 / 刷新
+  - 菜单自动夹紧视口；点击外部 / Esc / 窗口失焦自动关闭；操作失败在
+    对应目录行内联红色提示；重命名/删除自动维护已打开的标签页
+
+### Changed
+
+- 宿主 RPC 通道新增 `createFile` / `createDir` / `rename` / `delete` 四个
+  端点（node:fs 实现，经 `ctx.fs.resolve` 统一解析；rename 拒绝覆盖已存在
+  目标，delete 按 stat 决定递归）；`rpc.handle` 注册改为 effect 包裹，
+  HMR/停用循环不再泄漏路由
+
+### Fixed
+
+- **右键菜单文字看不清**：maid-atelier 皮肤对 `[role='menu']` 有全局规则，
+  会把菜单文字色劫持为「页面主题」色，而菜单背景跟随「workbench 主题」，
+  两者不一致时文字与背景同色系。菜单颜色现已锁定到 workbench 主题变量
+  （`!important`），任何皮肤组合下文字都与背景保持对比
+
 ## [0.0.4] - 2026-08-17
 
 ### Fixed
@@ -23,8 +57,6 @@
 - 打开/切换含大量文件的目录不再卡顿：文件树行改为 memo 组件，点击文件
   只重渲染受影响的单行（此前每次点击都重渲染整棵文件树）；切换工作区时
   恢复已展开目录改为分批加载
-
-## [Unreleased]
 
 ## [0.0.3] - 2026-08-16
 

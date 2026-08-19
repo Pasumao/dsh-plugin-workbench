@@ -23,12 +23,16 @@ export function apply(ctx: Context): void {
   const listDir = (path: string, signal?: AbortSignal) => unwrap(ctx.connection.rpc.call(CHANNEL, 'list', { path }, signal))
   const readFile = (path: string, signal?: AbortSignal) => unwrap(ctx.connection.rpc.call(CHANNEL, 'read', { path }, signal))
   const writeFile = (path: string, content: string, signal?: AbortSignal) => unwrap(ctx.connection.rpc.call(CHANNEL, 'write', { path, content }, signal))
+  const createFile = (path: string, signal?: AbortSignal) => unwrap(ctx.connection.rpc.call(CHANNEL, 'createFile', { path }, signal))
+  const createDir = (path: string, signal?: AbortSignal) => unwrap(ctx.connection.rpc.call(CHANNEL, 'createDir', { path }, signal))
+  const renameFile = (path: string, to: string, signal?: AbortSignal) => unwrap(ctx.connection.rpc.call(CHANNEL, 'rename', { path, to }, signal))
+  const removePath = (path: string, signal?: AbortSignal) => unwrap(ctx.connection.rpc.call(CHANNEL, 'delete', { path }, signal))
   const openPath = (path: string) => ctx.workspaces.openPath(path)
 
   ctx.slots.inject('explorer', () => ctx.slots.register({
     name: 'explorer',
     locale: NS,
-    inject: () => ({ listDir, openPath }),
+    inject: () => ({ listDir, openPath, createFile, createDir, renameFile, removePath }),
   }, FileExplorer))
 
   ctx.slots.inject('explorer.preview', () => ctx.slots.register({

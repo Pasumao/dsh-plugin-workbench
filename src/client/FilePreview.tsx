@@ -4,7 +4,7 @@
  * a syntax-highlighted layer (Ctrl/Cmd+S saves). Tabs are drag-reorderable.
  * Opening/closing the first/last tab is animated.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent as ReactDragEvent, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import styles from './files.module.css'
 import { detectLanguage, highlightCode } from './highlight'
@@ -14,7 +14,7 @@ import { activateFile, closeFile, collapsePreview, moveTab, toggleWrap, useTabsS
 import type { FsReadResult } from './FileExplorer'
 
 interface TabData {
-  status: 'loading' | 'loaded' | 'binary' | 'too-large' | 'error'
+  status: 'loading' | 'loaded' | 'image' | 'binary' | 'too-large' | 'error'
   content?: string
   draft?: string
   dirty?: boolean
@@ -36,6 +36,23 @@ export interface FilePreviewProps {
 const PREVIEW_MIN = 240
 const CHAT_MIN = 240
 const PREVIEW_TOO_LARGE_LABEL = '512KB'
+
+/** Same-origin raw-bytes route registered by the host half (see src/index.ts). */
+const RAW_PREFIX = '/dsh-plugin-files/raw'
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'svg'])
+
+/**
+ * Same-origin URL serving the file's bytes when it is a previewable image;
+ * undefined otherwise. Image tabs never go through the text RPC read — the
+ * host route resolves the path through the sandboxed fs service itself.
+ */
+function imageSrcOf(path: string): string | undefined {
+  const idx = path.lastIndexOf('.')
+  if (idx < 0 || idx === path.length - 1) return undefined
+  const ext = path.slice(idx + 1).toLowerCase()
+  return IMAGE_EXTENSIONS.has(ext) ? `${RAW_PREFIX}/${encodeURIComponent(path)}` : undefined
+}
 
 /**
  * Above this size the overlay editor (syntax-highlight layer + transparent
@@ -78,6 +95,19 @@ function previewDataOf(result: FsReadResult): TabData {
   return { status: 'loaded', content: result.content, draft: result.content, dirty: false, size: result.size }
 }
 
+/**
+ * Gutter text for an editor: one logical line number per source line, as a
+ * single pre-formatted block (VS Code shows logical numbers even when soft
+ * wrap makes a line occupy several visual rows).
+ */
+function lineNumbersOf(content: string): string {
+  const count = content.split('\n').length
+  if (count <= 1) return '1'
+  const parts = new Array<string>(count)
+  for (let i = 0; i < count; i += 1) parts[i] = String(i + 1)
+  return parts.join('\n')
+}
+
 export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
   const { tabs, active, theme, collapsed, wrap } = useTabsState()
 
@@ -89,11 +119,13 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
   const cacheRef = useRef<Map<string, TabData>>(new Map())
   const hasOpenedRef = useRef(false)
   const [, bump] = useState(0)
+  const [imageFailed, setImageFailed] = useState<string | undefined>(undefined)
 
   const previewRef = useRef<HTMLDivElement>(null)
   const handleRef = useRef<HTMLDivElement>(null)
   const highlightRef = useRef<HTMLPreElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const gutterRef = useRef<HTMLDivElement>(null)
 
   const refresh = useCallback(() => bump((v) => v + 1), [])
 
@@ -111,6 +143,13 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
       return undefined
     }
     const controller = new AbortController()
+    // Image files skip the text RPC read entirely: the raw-bytes route serves
+    // them straight into an <img> tag, so there is nothing to load here.
+    if (imageSrcOf(target) !== undefined) {
+      cache.set(target, { status: 'image' })
+      refresh()
+      return () => controller.abort()
+    }
     cache.set(target, { status: 'loading' })
     readFile(target, controller.signal)
       .then((result) => {
@@ -133,6 +172,12 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
     refresh()
     return () => controller.abort()
   }, [tabs, active, readFile, refresh])
+
+  // A failed <img> (deleted file, oversized, …) must not keep showing the
+  // broken-image placeholder when the user switches away and back.
+  useEffect(() => {
+    setImageFailed(undefined)
+  }, [active])
 
   // Animate the last tab closing without a mount/unmount bounce: keep the pane
   // mounted while `hasOpenedRef` is set, then drop it after the transition.
@@ -159,21 +204,31 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
   const language = active !== undefined ? detectLanguage(active) : undefined
   const tooBig = (activeData?.size ?? 0) > HIGHLIGHT_MAX_BYTES
   const plain = language === undefined || tooBig || (language !== undefined && PLAIN_LANGUAGES.has(language))
+  // Rebuild the gutter text only when the draft changes (not on every bump
+  // from tab switches or focus re-renders).
+  const gutterNumbers = useMemo(
+    () => (activeData?.status === 'loaded' ? lineNumbersOf(activeData.draft ?? '') : ''),
+    [activeData?.status, activeData?.draft],
+  )
 
-  // Keep the highlight layer's scroll in lockstep with the textarea on every
-  // frame while the overlay editor is open: some engines don't fire scroll
-  // events during selection auto-scroll, which would otherwise leave the
-  // visible layer behind the selection (drag-select misalignment). Both
-  // layers are `overflow: auto` with identical content, so the assignment is
-  // a no-op whenever they are already aligned.
+  // Keep the highlight layer and the line-number gutter in lockstep with the
+  // textarea on every frame while the editor is open: some engines don't fire
+  // scroll events during selection auto-scroll, which would otherwise leave
+  // the visible layer and the numbers behind the selection (drag-select
+  // misalignment). All layers are `overflow: auto|hidden` with identical
+  // content geometry, so the assignment is a no-op whenever they align.
   useEffect(() => {
     const pre = highlightRef.current
     const ta = textareaRef.current
-    if (pre === null || ta === null || plain) return undefined
+    const gutter = gutterRef.current
+    if (ta === null || gutter === null) return undefined
     let raf = 0
     const tick = () => {
-      pre.scrollTop = ta.scrollTop
-      pre.scrollLeft = ta.scrollLeft
+      if (pre !== null) {
+        pre.scrollTop = ta.scrollTop
+        pre.scrollLeft = ta.scrollLeft
+      }
+      gutter.scrollTop = ta.scrollTop
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
@@ -258,11 +313,13 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
 
   const onTextareaScroll = useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
     const pre = highlightRef.current
+    const gutter = gutterRef.current
     const ta = e.currentTarget
     if (pre !== null) {
       pre.scrollTop = ta.scrollTop
       pre.scrollLeft = ta.scrollLeft
     }
+    if (gutter !== null) gutter.scrollTop = ta.scrollTop
   }, [])
 
   const onTabDragStart = useCallback((e: ReactDragEvent<HTMLDivElement>, path: string) => {
@@ -298,6 +355,9 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
             className={`${styles.editor}${plain ? ` ${styles.editorPlain}` : ''}`}
             data-wrap={wrap ? 'on' : 'off'}
           >
+            <div ref={gutterRef} className={styles.gutter} aria-hidden="true">
+              <div className={styles.gutterNumbers}>{gutterNumbers}</div>
+            </div>
             {!plain && active !== undefined && (
               <pre ref={highlightRef} className={styles.editorHighlight} aria-hidden="true">
                 <code dangerouslySetInnerHTML={{ __html: highlightCode(activeData.draft ?? '', active) }} />
@@ -317,6 +377,32 @@ export function FilePreview({ t, readFile, writeFile }: FilePreviewProps) {
             {saveError !== undefined && <div className={styles.saveError}>{saveError}</div>}
           </div>
         )
+      case 'image': {
+        const src = active !== undefined ? imageSrcOf(active) : undefined
+        const name = active !== undefined ? basenameOf(active) : ''
+        if (src === undefined) {
+          return <div className={styles.previewHint}>{t('preview.binary')}</div>
+        }
+        if (imageFailed === active) {
+          return (
+            <div className={styles.previewHint}>
+              <div>{t('preview.imageFailed')}</div>
+              <div className={styles.previewMeta}>{name}</div>
+            </div>
+          )
+        }
+        return (
+          <div className={styles.imageView}>
+            <img
+              className={styles.image}
+              src={src}
+              alt={name}
+              onError={() => setImageFailed(active)}
+            />
+            <div className={styles.previewMeta}>{name}</div>
+          </div>
+        )
+      }
       case 'binary':
         return (
           <div className={styles.previewHint}>
