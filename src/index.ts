@@ -202,6 +202,44 @@ function isFsErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && (error as { code?: unknown }).code === code
 }
 
+/**
+ * EPERM / EBUSY from a move or remove almost always means the path — or, on
+ * Windows, a file INSIDE a directory being moved/deleted — is open elsewhere
+ * (an editor, Explorer, a terminal sitting inside it, an antivirus scan).
+ * EACCES is left alone: that usually means read-only/ACL, not a lock.
+ */
+function isInUseError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const code = (error as { code?: unknown }).code
+  return code === 'EPERM' || code === 'EBUSY'
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Retry a mutation a bounded number of times while it fails with a transient
+ * Windows lock (indexer/antivirus handles usually clear within milliseconds).
+ * Genuine "permission denied" / "in use" errors surface after the retries.
+ */
+async function withLockRetry(op: () => Promise<void>, attempts = 3, gapMs = 150): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await op()
+      return
+    } catch (error) {
+      if (!isInUseError(error) || attempt >= attempts) throw error
+      await sleep(gapMs * attempt)
+    }
+  }
+}
+
+/** Actionable replacement for a bare "permission denied" when a folder is locked. */
+function lockMessage(path: string): string {
+  return `"${basename(path)}" is in use by another program — close any editor/Explorer view of it (or a terminal inside it) and retry`
+}
+
 function fail(message: string): FilesRpcErr {
   return { ok: false, error: { code: 'internal', message, details: {} } }
 }
@@ -639,9 +677,13 @@ async function renameEntry(ctx: Context, payload: unknown, signal: AbortSignal):
     // fs.rename overwrites silently on POSIX; refuse when the destination exists.
     const existing = await ctx.fs.stat(toTarget, signal)
     if (existing !== undefined) return fail('rename: destination already exists')
-    await renameFs(osPath, toOsPath)
+    // Windows refuses to move a directory while it (or a file inside it) is
+    // open elsewhere; transient locks clear quickly, so retry briefly before
+    // reporting the actionable "in use" message.
+    await withLockRetry(() => renameFs(osPath, toOsPath))
     return { ok: true, value: { path: toOsPath } }
   } catch (error) {
+    if (isInUseError(error)) return fail(lockMessage(path))
     return fail(mapError(error))
   }
 }
@@ -655,9 +697,12 @@ async function deleteEntry(ctx: Context, payload: unknown, signal: AbortSignal):
     const info = await ctx.fs.stat(target, signal)
     if (info === undefined) return fail(`path not found: ${path}`)
     // Folders are removed recursively (the client confirms before calling).
-    await rm(osPath, { recursive: info.type === 'directory', force: true })
+    // Like rename, a folder with an open inner file fails on Windows; retry
+    // transient locks, then report the actionable "in use" message.
+    await withLockRetry(() => rm(osPath, { recursive: info.type === 'directory', force: true }))
     return { ok: true, value: { path: osPath } }
   } catch (error) {
+    if (isInUseError(error)) return fail(lockMessage(path))
     return fail(mapError(error))
   }
 }
@@ -707,6 +752,8 @@ async function copyEntry(ctx: Context, payload: unknown, signal: AbortSignal): P
       // collision as a successful no-op so the client can ask about overwrite.
       return { ok: true, value: { path: toOs, exists: true } }
     }
+    // Copying a folder with an open inner file fails like move/delete do.
+    if (isInUseError(error)) return fail(lockMessage(from))
     return fail(mapError(error))
   }
 }

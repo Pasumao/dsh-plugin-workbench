@@ -902,6 +902,17 @@ export function FileExplorer({
   const onTreeKeyDown = useCallback((e: ReactKeyboardEvent) => {
     const mod = e.ctrlKey || e.metaKey
     const key = e.key.toLowerCase()
+    // Never hijack Ctrl/Cmd+C/X while the user is copying an actual text
+    // selection (e.g. an inline error message rendered inside the tree): the
+    // browser must get the key so the selected text is copied instead of the
+    // selected files. Also let editable elements (if any ever live in the
+    // tree) keep their native copy/cut behavior.
+    if (mod && (key === 'c' || key === 'x')) {
+      const target = e.target as HTMLElement | null
+      if (target !== null && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+      const selection = window.getSelection()
+      if (selection !== null && !selection.isCollapsed && selection.toString().length > 0) return
+    }
     if (mod && key === 'c') {
       const items = selectedItems()
       if (items.length === 0) return

@@ -4,6 +4,22 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.0.8] - 2026-08-20
+
+### Fixed
+
+- **删除/复制被占用文件夹不再报裸 "permission denied"**：Windows 上文件夹或其
+  内部任一文件被其他程序占用（编辑器、资源管理器、终端 cd 其中、杀毒扫描）时，
+  改名/删除会以 EPERM/EBUSY 失败。host 端 `rename` / `delete` / `copy` 端点
+  现在先做**有界重试**（3 次、150/300ms 间隔），可自动扛过索引器/杀毒的瞬时
+  占用；仍失败时返回可操作的提示「`名称` is in use by another program —
+  close any editor/Explorer view of it (or a terminal inside it) and retry」，
+  替代原先无指引的 "permission denied"
+- **树内复制文本不再误触发文件复制**：在树中选中文件/文件夹后，再去选中树内
+  的实际文本（如行内错误提示）按 Ctrl/Cmd+C/X 时，此前会拦截浏览器原生复制、
+  把选中的文件放进插件剪贴板。现改为：存在非空文本选区或焦点在可编辑元素时，
+  快捷键交给浏览器原生处理，复制的是文字而非文件
+
 ## [0.0.7] - 2026-08-19
 
 ### Fixed
