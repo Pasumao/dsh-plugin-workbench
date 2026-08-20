@@ -4,6 +4,7 @@
 ![License](https://img.shields.io/github/license/Pasumao/dsh-plugin-workbench)
 ![CI](https://img.shields.io/github/actions/workflow/status/Pasumao/dsh-plugin-workbench/ci.yml?branch=main)
 ![Stars](https://img.shields.io/github/stars/Pasumao/dsh-plugin-workbench?style=social)
+![AI Assisted](https://img.shields.io/badge/AI-Assisted-8A2BE2)
 
 **能直接改文件的 VS Code 风格工作台**——不是只读预览：文件树 + 可编辑代码预览
 （语法高亮、标签页、行号栏）+ 右键文件操作（新建 / 重命名 / 删除 / 复制 / 剪切 /
@@ -48,6 +49,15 @@
 - 磁盘变更：宿主对打开文件做 `fs.watch`（监听父目录，可存活原子重命名），
   变更经 SSE `/dsh-plugin-files/events` 推送，干净标签自动同步
 
+## 配置
+
+无需环境变量或配置文件，安装后打一次布局补丁即可：
+
+- **布局补丁**：`node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs`
+  （针对 `dsh-client-ui-layout@0.1.0-rc.6` 编写，DSH 升级覆盖 bundle 后需重跑）；
+- **行为偏好**（自动换行、亮暗主题、标签布局、文件树展开状态）按工作区持久化，无需手动配置；
+- **文件操作通道**：经 loopback RPC `/dsh-plugin-files`，写操作显式以 `danger-full-access` 执行，无外部配置项。
+
 ## 安装
 
 > 布局补丁针对 `dsh-client-ui-layout@0.1.0-rc.6` 编写，其他版本需更新锚点。
@@ -57,6 +67,16 @@
 dsh plugin --profile web add dsh-plugin-workbench
 # 或 GitHub
 dsh plugin --profile web add github:Pasumao/dsh-plugin-workbench
+```
+
+源码安装（本地开发 / 调试）：
+
+```bash
+git clone https://github.com/Pasumao/dsh-plugin-workbench.git
+cd dsh-plugin-workbench
+pnpm install
+pnpm run build     # 产出 lib/index.js 与 lib/client.js
+# 以 link: 方式挂载进 profile
 ```
 
 安装后打布局补丁并重启：
