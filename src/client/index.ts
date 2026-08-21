@@ -11,6 +11,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { FileExplorer } from './FileExplorer'
 import { FilePreview } from './FilePreview'
 import { NS, zh, en } from './locales'
+import { installComposerDrops } from './composer'
+import { installMentionLinkifier } from './mentions'
 
 const CHANNEL = '/dsh-plugin-files'
 
@@ -19,6 +21,11 @@ export const inject = ['slots', 'sessions', 'workspaces', 'locale', 'connection'
 
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'files-explorer: dictionaries')
+
+  // Drag-to-chat + @-mention linkifier: DOM-level integrations, one-time
+  // install (module guards make re-applies on HMR idempotent).
+  installComposerDrops()
+  ctx.effect(() => installMentionLinkifier(), 'files-explorer: @mention linkifier')
 
   const listDir = (path: string, signal?: AbortSignal) => unwrap(ctx.connection.rpc.call(CHANNEL, 'list', { path }, signal))
   const readFile = (path: string, signal?: AbortSignal) => unwrap(ctx.connection.rpc.call(CHANNEL, 'read', { path }, signal))

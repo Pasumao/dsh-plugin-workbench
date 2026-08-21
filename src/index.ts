@@ -852,10 +852,22 @@ async function copyEntry(ctx: Context, payload: unknown, signal: AbortSignal): P
 // "open in system" gesture (`ctx.workspaces.openPath`).
 // ---------------------------------------------------------------------------
 
-/** Spawn one short-lived desktop command; resolves once the process launched. */
-function runDesktop(command: string, args: string[]): Promise<void> {
+/**
+ * Spawn one short-lived desktop command; resolves once the process launched.
+ *
+ * `windowsHide` defaults to true (no console flash for console-subsystem
+ * helpers). EXPLORER.EXE IS THE ONE EXCEPTION: spawning it with
+ * `windowsHide: true` sets CREATE_NO_WINDOW, and the new shell folder window
+ * is then created HIDDEN — the folder opens on screen but stays invisible, so
+ * the user sees "nothing happened". (Verified empirically: the CabinetWClass
+ * window exists with `visible=False`; dropping the flag makes it visible.)
+ * explorer.exe is a GUI-subsystem app, so `windowsHide: false` never flashes
+ * a console — pass false on every Windows explorer.exe spawn.
+ * @param args - argv (never a shell string).
+ */
+function runDesktop(command: string, args: string[], windowsHide = true): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true })
+    const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide })
     child.once('error', reject)
     child.once('spawn', () => {
       // The window stays after the harness exits; nothing to wait for.
@@ -888,8 +900,9 @@ async function revealNative(osPath: string, isDir: boolean, signal: AbortSignal)
   if (platform === 'win32') {
     // explorer returns exit code 1 when it opens a NEW window, so exit codes
     // carry no meaning; a clean spawn is success. Files are selected in their
-    // folder; folders are opened directly.
-    await runDesktop('explorer.exe', isDir ? [osPath] : ['/select,', osPath])
+    // folder; folders are opened directly. windowsHide MUST stay false for
+    // explorer.exe (see runDesktop doc: CREATE_NO_WINDOW hides the new window).
+    await runDesktop('explorer.exe', isDir ? [osPath] : ['/select,', osPath], false)
     return
   }
   if (platform === 'darwin') {
@@ -903,7 +916,7 @@ async function revealNative(osPath: string, isDir: boolean, signal: AbortSignal)
     if (env.WSL_DISTRO_NAME !== undefined || env.WSL_INTEROP !== undefined) {
       const windowsPath = (await execCapture('wslpath', ['-w', osPath])).replace(/[\r\n]+$/, '')
       if (windowsPath === '') throw new Error('wslpath returned no Windows path')
-      await runDesktop('explorer.exe', isDir ? [windowsPath] : ['/select,', windowsPath])
+      await runDesktop('explorer.exe', isDir ? [windowsPath] : ['/select,', windowsPath], false)
       return
     }
     // Desktop Linux: the default file manager opens folders; files open in

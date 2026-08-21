@@ -10,6 +10,7 @@ import { FileIcon } from './fileIcons'
 import type { FilesKey } from './locales'
 import { cancelCut, clearClipboard, closeFilesUnder, copyToClipboard, expandPreview, openFile, popUndo, pushUndo, retargetFile, setCwd, toggleTheme, useClipboard, useTabsState } from './store'
 import type { ClipboardItem, ClipboardMode, UndoEntry } from './store'
+import { DRAG_TYPE, insertIntoComposer, relPathOf } from './composer'
 
 export interface FsListEntry {
   name: string
@@ -286,9 +287,10 @@ export function FileExplorer({
   const dragPathsRef = useRef<string[] | null>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
 
-  // ---- context menu (rows only: right-clicking blank space shows no menu) ----
+  // ---- context menu (rows, blank tree space, header and clipboard bar —
+  //      the whole column carries a menu; right-clicking a row keeps its own) ----
   interface MenuState {
-    kind: 'file' | 'dir'
+    kind: 'file' | 'dir' | 'blank'
     path: string
     x: number
     y: number
@@ -336,6 +338,24 @@ export function FileExplorer({
       window.removeEventListener('blur', onBlur)
     }
   }, [menu])
+
+  // Explorer semantics: clicking (or right-clicking) ANYWHERE outside the
+  // tree — the chat, the header, other columns — clears the selection. Clicks
+  // on the tree rows and inside the open menu keep it (the menu's batch
+  // actions operate on the selection).
+  useEffect(() => {
+    const onDocMouseDown = (e: MouseEvent) => {
+      const target = e.target
+      if (!(target instanceof Node)) return
+      const tree = treeAreaRef.current
+      if (tree !== null && tree.contains(target)) return
+      const m = menuRef.current
+      if (m !== null && m.contains(target)) return
+      setSelected({})
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [])
 
   // Latest tree snapshot for the polling tick (avoids stale closures).
   const treeRef = useRef({ root, children, expanded, rootLoading })
@@ -516,6 +536,16 @@ export function FileExplorer({
     setSelected((prev) => (prev[entry.path] !== undefined ? prev : { [entry.path]: entry.kind }))
     setMenu({ kind: entry.kind === 'dir' ? 'dir' : 'file', path: entry.path, x: e.clientX, y: e.clientY })
   }, [])
+
+  /** Right-click anywhere else in the column (header, clipboard bar, blank tree space): folder menu for the cwd. */
+  const onColumnContextMenu = useCallback((e: ReactMouseEvent) => {
+    e.preventDefault()
+    // Right-clicking the open menu itself keeps it (no browser menu either).
+    const el = menuRef.current
+    if (el !== null && e.target instanceof Node && el.contains(e.target)) return
+    if (cwd === undefined) return
+    setMenu({ kind: 'blank', path: cwd, x: e.clientX, y: e.clientY })
+  }, [cwd])
 
   const runAction = useCallback((action: () => void) => {
     setMenu(undefined)
@@ -809,11 +839,17 @@ export function FileExplorer({
     const paths = selected[entry.path] !== undefined ? Object.keys(selected) : [entry.path]
     dragPathsRef.current = paths
     try {
-      e.dataTransfer.setData('text/plain', entry.path)
+      // text/plain: natural browser fallback (a native textarea drop inserts
+      // the paths); the custom type carries the machine-readable list for the
+      // workbench's own chat-drop integration (composer.ts).
+      e.dataTransfer.setData('text/plain', paths.join('\n'))
+      e.dataTransfer.setData(DRAG_TYPE, JSON.stringify(paths))
     } catch {
       // dataTransfer may be unavailable — the ref still carries the paths
     }
-    e.dataTransfer.effectAllowed = 'move'
+    // copyMove: dropping on a folder row moves (tree), dropping on the chat
+    // copies the path text in.
+    e.dataTransfer.effectAllowed = 'copyMove'
   }, [selected])
 
   const onRowDragEnd = useCallback(() => {
@@ -897,6 +933,30 @@ export function FileExplorer({
     void openPath(entry.path)
   }, [openPath])
 
+  /** Explorer-style "Select All": every visible (non-trash) entry at any depth. */
+  const selectAllEntries = useCallback(() => {
+    const all: Record<string, FsListEntry['kind']> = {}
+    const collect = (entries: FsListEntry[]) => {
+      for (const entry of entries) {
+        if (entry.name === TRASH_NAME) continue
+        all[entry.path] = entry.kind
+        if (entry.kind === 'dir' && expanded.has(entry.path) && children[entry.path] !== undefined) {
+          collect(children[entry.path] as FsListEntry[])
+        }
+      }
+    }
+    const rootEntries = root !== undefined ? children[root] : undefined
+    if (rootEntries !== undefined) collect(rootEntries)
+    setSelected(all)
+  }, [children, expanded, root])
+
+  /** Insert `@<relative-workspace-path>` into the composer (Claude Code-style mention). */
+  const onMention = useCallback((path: string) => {
+    const mention = relPathOf(path, cwd)
+    if (mention.length === 0) return
+    insertIntoComposer(`@${mention} `)
+  }, [cwd])
+
   // Explorer-style keyboard: Ctrl/Cmd+C/X copy-cut, Ctrl/Cmd+V paste,
   // Ctrl/Cmd+A select-all, Escape clears the selection (and cancels a cut).
   const onTreeKeyDown = useCallback((e: ReactKeyboardEvent) => {
@@ -935,19 +995,7 @@ export function FileExplorer({
     }
     if (mod && key === 'a') {
       e.preventDefault()
-      const all: Record<string, FsListEntry['kind']> = {}
-      const collect = (entries: FsListEntry[]) => {
-        for (const entry of entries) {
-          if (entry.name === TRASH_NAME) continue
-          all[entry.path] = entry.kind
-          if (entry.kind === 'dir' && expanded.has(entry.path) && children[entry.path] !== undefined) {
-            collect(children[entry.path] as FsListEntry[])
-          }
-        }
-      }
-      const rootEntries = root !== undefined ? children[root] : undefined
-      if (rootEntries !== undefined) collect(rootEntries)
-      setSelected(all)
+      selectAllEntries()
       return
     }
     if (mod && key === 'z' && !e.shiftKey) {
@@ -966,7 +1014,7 @@ export function FileExplorer({
       setSelected({})
       cancelCut()
     }
-  }, [cancelCut, children, clipboard.items.length, deleteSelection, expanded, onPaste, performUndo, root, selectedItems, undoEntries.length])
+  }, [cancelCut, clipboard.items.length, deleteSelection, onPaste, performUndo, selectAllEntries, selectedItems, undoEntries.length])
 
   // ---- placeholder: no session / no cwd ----
   if (cwd === undefined) {
@@ -1043,9 +1091,12 @@ export function FileExplorer({
     const selectionCount = Object.keys(selected).length
     const deleteItem: MenuItem = selectionCount > 1
       ? { label: t('menu.deleteSelected', { count: selectionCount }), danger: true, onClick: () => void deleteSelection() }
-      : { label: t('menu.delete'), danger: true, onClick: () => onDelete(m.path, m.kind) }
+      // 'blank' never renders deleteItem (the blank branch returns earlier);
+      // the fallback only satisfies the union type.
+      : { label: t('menu.delete'), danger: true, onClick: () => onDelete(m.path, m.kind === 'blank' ? 'dir' : m.kind) }
     if (m.kind === 'file') {
       return [
+        { label: t('menu.atFile'), onClick: () => onMention(m.path) },
         { label: t('menu.open'), onClick: () => openFile(m.path) },
         'divider',
         { label: t('menu.copy'), onClick: () => onCopySelection('copy') },
@@ -1077,16 +1128,38 @@ export function FileExplorer({
         deleteItem,
       ]
     }
-    // Empty tree area: right-clicking blank space intentionally shows no
-    // custom menu (only file/folder rows do); this branch is unreachable but
-    // kept for the type. Paste happens via Ctrl+V into the current folder.
+    // Blank space / header / clipboard bar: operations against the current
+    // workspace folder (right-clicking blank space acts on the cwd, VS Code
+    // file-explorer style).
+    if (m.kind === 'blank') {
+      const dirPath = m.path
+      return [
+        { label: t('menu.newFile'), onClick: () => onNewFile(dirPath) },
+        { label: t('menu.newFolder'), onClick: () => onNewFolder(dirPath) },
+        { label: t('menu.paste'), disabled: clipboard.items.length === 0, onClick: () => void onPaste() },
+        'divider',
+        { label: t('menu.selectAll'), onClick: selectAllEntries },
+        { label: t('menu.undo'), disabled: undoEntries.length === 0, onClick: () => void performUndo() },
+        'divider',
+        { label: t('menu.copyPath'), onClick: () => onCopyPath(dirPath) },
+        { label: t('menu.revealInExplorer'), onClick: () => onReveal(dirPath, 'dir') },
+        { label: t('menu.openSystem'), onClick: () => void openPath(dirPath) },
+        { label: t('menu.refresh'), onClick: () => refreshDir(dirPath) },
+      ]
+    }
     return [
       { label: t('menu.paste'), disabled: clipboard.items.length === 0, onClick: () => void onPaste() },
     ]
   }
 
   return (
-    <div className={styles.column} style={{ width: width > 0 ? width : undefined }} data-pane="explorer" data-fe-theme={theme}>
+    <div
+      className={styles.column}
+      style={{ width: width > 0 ? width : undefined }}
+      data-pane="explorer"
+      data-fe-theme={theme}
+      onContextMenu={onColumnContextMenu}
+    >
       <div className={styles.header}>
         <span className={styles.headerTitle} title={root ?? cwd}>{basenameOf(root ?? cwd)}</span>
         <span className={styles.headerActions}>
@@ -1133,8 +1206,10 @@ export function FileExplorer({
         className={styles.treeArea}
         onKeyDown={onTreeKeyDown}
         onClick={(e) => {
-          // Clicking blank space deselects (Explorer behavior).
-          if (e.target === e.currentTarget) setSelected({})
+          // Clicking blank space (or a hint/error line — anything that is not
+          // a tree row) deselects, Explorer behavior.
+          const target = e.target as HTMLElement
+          if (target.closest('[role="treeitem"]') === null) setSelected({})
         }}
         onDragOver={(e) => {
           // Blank tree area also accepts a drop: move into the current folder.
@@ -1158,6 +1233,12 @@ export function FileExplorer({
           ref={menuRef}
           className={styles.contextMenu}
           role="menu"
+          onContextMenu={(e) => {
+            // Right-clicking the open menu keeps it (and never shows the
+            // browser menu).
+            e.preventDefault()
+            e.stopPropagation()
+          }}
           style={menuPos !== undefined ? { left: menuPos.x, top: menuPos.y } : { left: menu.x, top: menu.y, visibility: 'hidden' }}
         >
           {menuItems(menu).map((item, index) =>
