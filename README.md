@@ -11,7 +11,8 @@
 粘贴 / 在系统中打开 / 在资源管理器打开）+ 图片内联预览，每个工作区独立保存状态。
 装上之后，DSH 网页就是一个轻量代码编辑器。
 
-> ⚠️ 安装后需打一个布局补丁（见下方安装节）。
+> ⚠️ 安装后需打一个布局补丁（见下方安装节）；0.0.9 起插件启动时会自动检测并重打，
+> DSH 升级覆盖 bundle 后无需再手动跑。
 
 ## 功能
 
@@ -53,14 +54,17 @@
 
 无需环境变量或配置文件，安装后打一次布局补丁即可：
 
-- **布局补丁**：`node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs`
-  （针对 `dsh-client-ui-layout@0.1.0-rc.6` 编写，DSH 升级覆盖 bundle 后需重跑）；
+- **布局补丁**：插件 host 端启动时自动检测并重跑 `scripts/patch-layout.mjs`
+  （幂等、非阻塞；针对 `dsh-client-ui-layout@0.1.0-rc.6` 编写）。DSH 升级覆盖
+  bundle 后插件会自动补回；若自动重打失败（锚点失效），可手动运行
+  `node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs`；
 - **行为偏好**（自动换行、亮暗主题、标签布局、文件树展开状态）按工作区持久化，无需手动配置；
 - **文件操作通道**：经 loopback RPC `/dsh-plugin-files`，写操作显式以 `danger-full-access` 执行，无外部配置项。
 
 ## 安装
 
 > 布局补丁针对 `dsh-client-ui-layout@0.1.0-rc.6` 编写，其他版本需更新锚点。
+> 0.0.9 起插件启动时自动检测并重打补丁（详见「配置」节）。
 
 ```powershell
 # npm（推荐）
@@ -86,6 +90,9 @@ node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs
 # 重启 dsh web
 ```
 
+> 0.0.9 起插件启动时会自动检测并重打布局补丁，DSH 升级后无需再手动跑；
+> 仅当自动重打失败（锚点失效）时才需手动执行上面的命令。
+
 ## 开发
 
 ```powershell
@@ -107,7 +114,8 @@ dsh plugin --profile web remove dsh-plugin-workbench
   右键菜单的新建/重命名/删除同样经该通道（loopback 信任，与编辑器保存一致）
 - 图片预览走同源路由 `/dsh-plugin-files/raw/<path>`：仅响应图片扩展名，
   先经 `ctx.fs.resolve → stat`（沙箱一致的路径解析）再读取字节，20MB 上限
-- DSH 升级会覆盖布局 bundle，需重新运行补丁脚本；锚点失效时更新 `scripts/patch-layout.mjs`
+- DSH 升级会覆盖布局 bundle；0.0.9 起插件启动时自动检测并重打补丁，
+  无需手动重跑；锚点失效时需更新 `scripts/patch-layout.mjs`
 - 本仓库不包含 DSH 编译产物
 
 ## 参与贡献

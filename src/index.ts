@@ -27,10 +27,12 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { spawn } from 'node:child_process'
-import { watch as watchFs } from 'node:fs'
+import { existsSync, readFileSync, watch as watchFs } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
-import { basename, dirname } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { mkdir, rename as renameFs, rm, cp, writeFile as writeFileNode } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import { homedir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 
 export const name = 'dsh-plugin-workbench'
@@ -253,10 +255,88 @@ function pathOf(payload: unknown): string | undefined {
 }
 
 /**
+ * The explorer-column patch markers that scripts/patch-layout.mjs injects into
+ * the compiled dsh-client-ui-layout client bundle. A dsh upgrade (or a
+ * `pnpm install` that refreshes the ui-layout package) silently reverts that
+ * bundle, which makes the workbench column vanish even though this plugin is
+ * fine — this is the exact failure this auto-heal guards against.
+ */
+const LAYOUT_PATCH_MARKERS = [
+  '"explorerCol": "',
+  'setExplorer: (d, px) => {',
+  'renderSlot("explorer"',
+  'conversationSeat',
+] as const
+
+/** Resolve the installed dsh-client-ui-layout client bundle (profile node_modules junction). */
+function layoutClientPath(): string {
+  const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+  return join(dshHome, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-layout', 'lib', 'client.js')
+}
+
+/**
+ * True when the ui-layout bundle already carries the explorer-column patch.
+ * A missing bundle (non-standard install) is treated as "nothing to patch" so
+ * the check never blocks a boot; an unreadable file likewise bails out to the
+ * caller rather than throwing.
+ */
+function layoutIsPatched(): boolean {
+  try {
+    const target = layoutClientPath()
+    if (!existsSync(target)) return true
+    const text = readFileSync(target, 'utf8')
+    return LAYOUT_PATCH_MARKERS.every((marker) => text.includes(marker))
+  } catch {
+    return true
+  }
+}
+
+/** Module-level guard so a HMR/re-apply burst never spawns the patch twice concurrently. */
+let layoutPatchScheduled = false
+
+/**
+ * Re-apply the ui-layout explorer-column patch when it is missing.
+ *
+ * The workbench column renders into a fourth `explorer` slot that is added to
+ * the compiled dsh-client-ui-layout bundle by scripts/patch-layout.mjs. A dsh
+ * upgrade silently reverts that bundle, so this re-runs the same
+ * version-checked script: anchors that no longer match abort the script
+ * WITHOUT writing, so an incompatible dsh version never corrupts the bundle —
+ * it only logs a warning and the plugin still boots. Idempotent and
+ * non-blocking (spawned fire-and-forget), so it never delays a boot.
+ */
+function ensureLayoutPatch(): void {
+  if (layoutPatchScheduled) return
+  layoutPatchScheduled = true
+  try {
+    if (layoutIsPatched()) return
+    const script = join(dirname(dirname(fileURLToPath(import.meta.url))), 'scripts', 'patch-layout.mjs')
+    const child = spawn(process.execPath, [script], { stdio: 'inherit', windowsHide: true })
+    child.on('error', (err) => {
+      console.warn('[dsh-plugin-workbench] re-applying ui-layout explorer patch failed:', err.message)
+      layoutPatchScheduled = false
+    })
+    child.on('close', (code) => {
+      if (code === 0) {
+        console.log('[dsh-plugin-workbench] re-applied the missing dsh-client-ui-layout explorer patch (likely reverted by a dsh upgrade).')
+      } else {
+        console.warn(`[dsh-plugin-workbench] ui-layout patch exited ${code}; the dsh version may have changed — run scripts/patch-layout.mjs manually.`)
+        layoutPatchScheduled = false
+      }
+    })
+  } catch (err) {
+    console.warn('[dsh-plugin-workbench] ui-layout patch check failed:', err)
+    layoutPatchScheduled = false
+  }
+}
+
+/**
  * One filesystem-backed RPC endpoint pair. Reads never mutate; `signal`
  * cancels the underlying fs call (or aborts between steps).
  */
 export function apply(ctx: Context): void {
+  // Re-apply the ui-layout explorer-column patch when a dsh upgrade reverted it.
+  ensureLayoutPatch()
   // Per-apply watch state: created here (not module-level) so disable/reload
   // cycles never leak watchers or SSE clients across applies.
   const watchState: WatchState = {

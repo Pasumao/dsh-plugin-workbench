@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-workbench",
   "description": "VS Code-style workspace file explorer + editable preview for the dsh web GUI",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "engines": {

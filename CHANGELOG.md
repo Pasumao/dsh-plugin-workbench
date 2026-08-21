@@ -4,6 +4,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.0.9] - 2026-08-21
+
+### Added
+
+- **布局补丁自动修复（自愈）**：插件 host 端在启动时自动检测
+  `dsh-client-ui-layout` 客户端 bundle 是否还带 explorer 列补丁；若已被
+  DSH 升级 / `pnpm install` 覆盖还原（这正是 workbench 列无声消失的根因），
+  会自动重跑 `scripts/patch-layout.mjs` 重打。幂等（已打则跳过）、非阻塞
+  （spawn 后台执行，不影响启动）、安全（锚点不匹配时脚本 abort 不写文件，
+  仅记录警告，插件照常启动）。
+
 ## [0.0.8] - 2026-08-20
 
 ### Fixed
