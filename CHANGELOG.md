@@ -4,6 +4,12 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.0.11] - 2026-08-21
+
+### Added
+
+- **README 互相引用**：新增「相关插件」段，列出同系列已发布插件（npm / GitHub 链接 + 一句话说明），互相引流。
+
 ## [0.0.10] - 2026-08-21
 
 ### Fixed
