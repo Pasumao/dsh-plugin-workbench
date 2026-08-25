@@ -25,6 +25,18 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Register a lifecycle effect; the callback may return a disposer. */
     effect(callback: () => void | (() => void), name?: string): void
+    /** Subscribe to an event; returns the disposer. */
+    on(event: string, listener: (...args: unknown[]) => void): () => void
+    /** Resolve scoped services and run a callback in that scope. */
+    inject(deps: string[], callback: (scope: Context) => void): { dispose(): unknown }
+    /** Agent registry (host side; used to teach each agent the mention grammar). */
+    agents: {
+      list(): Array<{ ctx: Context }>
+    }
+    systemPrompt: {
+      /** Register one ordered system-prompt section; returns the disposer. */
+      section(section: { name: string; order: number; text: string | ((context: unknown) => string) }): () => void
+    }
     connection: {
       rpc: {
         /** Browser-side unary call over a registered logical channel. */

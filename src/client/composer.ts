@@ -1,17 +1,24 @@
 /**
  * Composer integration for the workbench file column.
  *
- * Two gestures land text in the chat composer without touching the core:
+ * Three gestures land text in the chat composer without touching the core:
  *
  * 1. Drag & drop — dragging one or more tree rows and dropping ANYWHERE
  *    outside the file column (the chat, the composer, the message list)
- *    inserts the dragged paths into the composer. Dropping INSIDE the file
- *    column still performs the tree's own move operation — the tree's drop
- *    handler runs first and stops propagation, so this document-level
- *    listener never sees those drops.
+ *    inserts the dragged paths into the composer as `@.\` mentions (falling
+ *    back to the absolute path when the file sits outside the workspace).
+ *    Dropping INSIDE the file column still performs the tree's own move
+ *    operation — the tree's drop handler runs first and stops propagation, so
+ *    this document-level listener never sees those drops.
  *
- * 2. Context-menu "@引用" — inserts `@<relative-workspace-path>` at the
- *    composer caret.
+ * 2. Context-menu "@引用" — inserts `@.\<relative-workspace-path>` at the
+ *    composer caret (the `.\` prefix marks the path as workspace-relative; a
+ *    path containing whitespace uses the quoted `@"\.\path with space"` form).
+ *
+ * 3. @-mention resolution — turns a mention token (with or without the `.\`
+ *    prefix, quoted or plain) into an absolute path against the session cwd;
+ *    used by the message linkifier and the composer overlay to open the file
+ *    in the workbench preview.
  *
  * The composer is a controlled React textarea, so the value is updated
  * through the native `value` setter + a bubbling `input` event (the standard
@@ -41,9 +48,21 @@ function onDocumentDrop(e: DragEvent): void {
   if (dt === null || !dt.types.includes(DRAG_TYPE)) return
   const paths = readDraggedPaths(dt)
   if (paths.length === 0) return
-  if (!insertIntoComposer(paths.join('\n'))) return
+  if (!insertIntoComposer(paths.map(dragMentionText).join('\n'))) return
   e.preventDefault()
   e.stopPropagation()
+}
+
+/**
+ * One dropped path as chat text: an `@.\` mention when it lives under the
+ * workspace, the absolute path otherwise (or when no cwd is known yet).
+ */
+function dragMentionText(path: string): string {
+  const { cwd } = getTabsState()
+  if (cwd === undefined) return path
+  const rel = relPathOf(path, cwd)
+  if (rel.length === 0 || rel === path) return path
+  return composerMention(rel)
 }
 
 /** Read the JSON paths from the custom type; falls back to raw text. */
@@ -118,17 +137,41 @@ export function relPathOf(path: string, cwd: string | undefined): string {
 }
 
 /**
- * Resolve an @-mention path (workspace-relative or absolute) against the
- * current workspace cwd; returns the absolute OS path, or undefined when the
- * mention cannot be resolved (no cwd and the path is not absolute).
+ * Format a workspace-relative path as an `@` mention for the composer: the
+ * `.\` (or `./`) prefix marks the path as relative to the workspace root, and
+ * a path containing whitespace uses the quoted `@"..."` form so it stays one
+ * token in the draft (and one link in the rendered message).
+ */
+export function composerMention(rel: string): string {
+  const sep = rel.includes('\\') ? '\\' : '/'
+  const raw = `@.${sep}${rel}`
+  if (/[\s"]/.test(raw)) return `@"${raw}"`
+  return raw
+}
+
+/** Strip quote wrapping and a leading `.\` / `./` workspace marker. */
+function normalizeMention(mention: string): string {
+  let inner = mention
+  if (inner.startsWith('"') && inner.endsWith('"') && inner.length >= 2) inner = inner.slice(1, -1)
+  if (inner.startsWith('.\\') || inner.startsWith('./')) inner = inner.slice(2)
+  return inner
+}
+
+/**
+ * Resolve an @-mention path (workspace-relative with or without the `.\`
+ * marker, or absolute) against the current workspace cwd; returns the absolute
+ * OS path, or undefined when the mention cannot be resolved (no cwd and the
+ * path is not absolute).
  */
 export function resolveMentionPath(mention: string): string | undefined {
-  const absolute = /^[A-Za-z]:[\\/]/.test(mention) || mention.startsWith('/') || mention.startsWith('\\')
+  const inner = normalizeMention(mention)
+  if (inner.length === 0) return undefined
+  const absolute = /^[A-Za-z]:[\\/]/.test(inner) || inner.startsWith('/') || inner.startsWith('\\')
   const { cwd } = getTabsState()
-  if (absolute) return mention
+  if (absolute) return inner
   if (cwd === undefined) return undefined
   const sep = cwd.includes('\\') ? '\\' : '/'
-  return cwd.endsWith('\\') || cwd.endsWith('/') ? cwd + mention : cwd + sep + mention
+  return cwd.endsWith('\\') || cwd.endsWith('/') ? cwd + inner : cwd + sep + inner
 }
 
 /** Open an @-mention's file in the workbench preview (used by the linkifier). */

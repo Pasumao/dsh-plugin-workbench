@@ -10,7 +10,7 @@ import { FileIcon } from './fileIcons'
 import type { FilesKey } from './locales'
 import { cancelCut, clearClipboard, closeFilesUnder, copyToClipboard, expandPreview, openFile, popUndo, pushUndo, retargetFile, setCwd, toggleTheme, useClipboard, useTabsState } from './store'
 import type { ClipboardItem, ClipboardMode, UndoEntry } from './store'
-import { DRAG_TYPE, insertIntoComposer, relPathOf } from './composer'
+import { DRAG_TYPE, composerMention, insertIntoComposer, relPathOf } from './composer'
 
 export interface FsListEntry {
   name: string
@@ -950,11 +950,14 @@ export function FileExplorer({
     setSelected(all)
   }, [children, expanded, root])
 
-  /** Insert `@<relative-workspace-path>` into the composer (Claude Code-style mention). */
+  /**
+   * Insert an `@.\<relative-workspace-path>` mention into the composer (the
+   * `.\` prefix marks the path as workspace-relative; see composerMention).
+   */
   const onMention = useCallback((path: string) => {
     const mention = relPathOf(path, cwd)
     if (mention.length === 0) return
-    insertIntoComposer(`@${mention} `)
+    insertIntoComposer(`${composerMention(mention)} `)
   }, [cwd])
 
   // Explorer-style keyboard: Ctrl/Cmd+C/X copy-cut, Ctrl/Cmd+V paste,

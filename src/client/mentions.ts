@@ -1,11 +1,11 @@
 /**
  * @-mention linkifier for the conversation.
  *
- * The workbench inserts `@<relative-workspace-path>` into the composer (menu
- * gesture "在消息中引用"), and this module makes the mention VISIBLE as a
- * hyperlink once the message is rendered: any `@` followed by a token that
- * matches the mention grammar is wrapped in an anchor, and clicking it opens
- * the file in the workbench preview.
+ * The workbench inserts `@.\<relative-workspace-path>` into the composer (menu
+ * gesture "在消息中引用"; the `.\` prefix marks a workspace-relative path), and
+ * this module makes the mention VISIBLE as a hyperlink once the message is
+ * rendered: any `@`-prefixed token that matches the mention grammar is wrapped
+ * in an anchor, and clicking it opens the file in the workbench preview.
  *
  * Grammar (anything else stays plain text with no special meaning):
  *   - `@` must sit at a token boundary (start of text, whitespace, or
@@ -14,8 +14,12 @@
  *   - the token is the longest run of non-whitespace, non-`@` characters,
  *     with trailing sentence punctuation trimmed (`.。 ,， ;； :： !！ ?？ )）`…);
  *   - the remaining token must be a RELATIVE path (never drive-absolute or
- *     leading-slash), and path-shaped: either contains a `/` or `\` directory
- *     separator, or is a single segment ending in a file extension.
+ *     leading-slash) — optionally prefixed with a `.\` or `./` workspace
+ *     marker — and path-shaped: either contains a `/` or `\` directory
+ *     separator, or is a single segment ending in a file extension;
+ *   - a path containing whitespace may instead use the quoted `@"token"` form
+ *     (the workbench writes it when the rel path has spaces, e.g.
+ *     `@"\.\my plan.md"`).
  *
  * Scanning mirrors the table-zoom enhancer: a MutationObserver on
  * `document.body`, rAF-coalesced, walks the text nodes of every
@@ -27,6 +31,9 @@ import { openMention } from './composer'
 
 /** Mention pattern: `@` + token (no whitespace, no embedded `@`). */
 const MENTION_RE = /@([^\s@]+)/g
+
+/** Quoted mention pattern: `@"token"` — used when the path contains whitespace. */
+const QUOTED_MENTION_RE = /@"([^"@]+)"/g
 
 /** Trailing characters trimmed from a mention token before validation. */
 const TRAILING = new Set(['.', ',', ';', ':', '!', '?', '。', '，', '；', '：', '！', '？', ')', '）', ']', '】', '}', '》', '」', '』', '"', "'"])
@@ -51,9 +58,10 @@ export function isMentionToken(token: string): boolean {
   if (token.startsWith('/') || token.startsWith('\\')) return false
   if (token.startsWith('..')) return false
   // Path-shaped: a directory separator anywhere, or a single file segment
-  // with an extension.
+  // with an extension. Spaces are allowed in the extension part — unquoted
+  // tokens never contain whitespace anyway, but `@"..."` paths may.
   if (token.includes('/') || token.includes('\\')) return true
-  return /^[^\\/]+\.[A-Za-z0-9_][A-Za-z0-9._~+-]*$/.test(token)
+  return /^[^\\/]+\.[A-Za-z0-9_][A-Za-z0-9._~+ -]*$/.test(token)
 }
 
 /** Trim trailing sentence punctuation from a raw mention token. */
@@ -68,7 +76,9 @@ export function trimMentionToken(raw: string): string {
 /**
  * Extract every valid mention from `text` as [start, end, mention] ranges.
  * `end` covers `@` + the TRIMMED token (trailing punctuation stays outside the
- * link). Pure and testable: the DOM walk uses it and then splits the text node.
+ * link). For the quoted `@"..."` form the span covers `@"..."` including both
+ * quotes, while `mention` carries the inner path (used for resolution).
+ * Pure and testable: the DOM walk uses it and then splits the text node.
  */
 export function findMentions(text: string): Array<{ start: number; end: number; mention: string }> {
   const hits: Array<{ start: number; end: number; mention: string }> = []
@@ -82,7 +92,30 @@ export function findMentions(text: string): Array<{ start: number; end: number; 
     if (!isMentionToken(token)) continue
     hits.push({ start: at, end: at + 1 + token.length, mention: token })
   }
-  return hits
+  QUOTED_MENTION_RE.lastIndex = 0
+  let quoted: RegExpExecArray | null
+  while ((quoted = QUOTED_MENTION_RE.exec(text)) !== null) {
+    const at = quoted.index
+    const inner = quoted[1]
+    if (!isBoundaryBefore(at > 0 ? text[at - 1] : undefined)) continue
+    if (!isMentionToken(inner)) continue
+    hits.push({ start: at, end: at + inner.length + 3, mention: inner })
+  }
+  // Deterministic order, and a quoted span that starts on the same `@` as a
+  // plain one shadows that plain hit (plain hits on `@"` tokens are invalid
+  // and filtered out already, so this only guards future grammar regressions).
+  hits.sort((a, b) => a.start - b.start || a.end - b.end)
+  const merged: Array<{ start: number; end: number; mention: string }> = []
+  for (const hit of hits) {
+    const prev = merged[merged.length - 1]
+    if (prev !== undefined && hit.start === prev.start) {
+      merged[merged.length - 1] = hit
+      continue
+    }
+    if (prev !== undefined && hit.start < prev.end) continue
+    merged.push(hit)
+  }
+  return merged
 }
 
 /** Containers whose text is never linkified (code, existing links, overlays). */

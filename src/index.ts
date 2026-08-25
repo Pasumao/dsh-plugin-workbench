@@ -36,7 +36,7 @@ import { homedir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 
 export const name = 'dsh-plugin-workbench'
-export const inject = ['fs', 'connection', 'webServer']
+export const inject = ['fs', 'connection', 'webServer', 'systemPrompt', 'agents']
 
 /** Loopback-only logical RPC channel. */
 export const CHANNEL = '/dsh-plugin-files'
@@ -331,12 +331,28 @@ function ensureLayoutPatch(): void {
 }
 
 /**
+ * Stable system-prompt section teaching the model the workbench `@.\` mention
+ * grammar. The core already contributes a generic "paths prefixed with @ are
+ * files referenced by the user" section (dsh-file-reference-local, order 99);
+ * this one documents the actual syntax the GUI inserts (the `.\` workspace
+ * marker, quoted form for paths with spaces) so the model resolves mentions
+ * against the session workspace root instead of treating `@.\…` as noise.
+ * Static text only — the string is identical on every assembly (KV-cache safe).
+ */
+const FILE_MENTION_PROMPT =
+  'Workspace file mentions written by the file panel use the form `@.<relative-path>` (a `.\` or `./` prefix marks a path relative to the current session workspace root; both `\\` and `/` separators are accepted, and paths with spaces use the quoted form `@"<relative-path>"`, for example `@"\\.\\my plan.md"`). Treat any such mention as a file the user wants you to read or edit: resolve the path against the workspace root and act on it with the file tools (read, glob, grep, edit, write); never claim to have inspected a file you did not actually open.'
+
+/** File-mention grammar taught to the model (see the FILE_MENTION_PROMPT doc). */
+
+/**
  * One filesystem-backed RPC endpoint pair. Reads never mutate; `signal`
  * cancels the underlying fs call (or aborts between steps).
  */
 export function apply(ctx: Context): void {
   // Re-apply the ui-layout explorer-column patch when a dsh upgrade reverted it.
   ensureLayoutPatch()
+  // Teach every agent the workbench `@.\` mention grammar (per-agent fiber).
+  installMentionPrompt(ctx)
   // Per-apply watch state: created here (not module-level) so disable/reload
   // cycles never leak watchers or SSE clients across applies.
   const watchState: WatchState = {
