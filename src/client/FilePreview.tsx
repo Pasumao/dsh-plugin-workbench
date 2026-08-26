@@ -47,6 +47,22 @@ const PREVIEW_MIN = 240
 const CHAT_MIN = 240
 const PREVIEW_TOO_LARGE_LABEL = '512KB'
 
+/** Persisted split width (px) — survives reloads so a drag is never lost. */
+const PREVIEW_WIDTH_KEY = 'dsh-plugin-workbench:preview-width'
+
+/** Read the persisted preview width; `null` means "use the default 55%". */
+function storedPreviewWidth(): number | null {
+  try {
+    if (typeof window === 'undefined') return null
+    const raw = window.localStorage.getItem(PREVIEW_WIDTH_KEY)
+    if (raw === null) return null
+    const px = Number(raw)
+    return Number.isFinite(px) && px > 0 ? px : null
+  } catch {
+    return null
+  }
+}
+
 /** Same-origin raw-bytes route registered by the host half (see src/index.ts). */
 const RAW_PREFIX = '/dsh-plugin-files/raw'
 
@@ -108,6 +124,23 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+/**
+ * Nearest ancestor that actually takes part in layout. The slot system wraps
+ * each slot's content in a `display: contents` element: children still join
+ * the OUTER flex row, but the wrapper itself reports a 0×0 bounding rect.
+ * Measuring that (the old `handle.parentElement`) made `max` collapse to
+ * `PREVIEW_MIN` on the first move — the pane jumped to its minimum width and
+ * could never be dragged back out. Skip every `display: contents` layer.
+ */
+function laidOutParent(el: HTMLElement | null): HTMLElement | null {
+  let node = el?.parentElement ?? null
+  while (node !== null) {
+    if (getComputedStyle(node).display !== 'contents') return node
+    node = node.parentElement
+  }
+  return null
+}
+
 /** Parent directory of a path ('C:/a/b.md' → 'C:/a'; '' when there is none). */
 function dirnameOf(path: string): string {
   const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
@@ -163,6 +196,10 @@ export function FilePreview({ t, readFile, writeFile, watchFiles }: FilePreviewP
   const highlightRef = useRef<HTMLPreElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const gutterRef = useRef<HTMLDivElement>(null)
+  // Live drag listeners, kept in refs so a new drag can ALWAYS clear any
+  // leftovers (a lost pointerup must not leak a stale onMove into the page).
+  const dragMoveRef = useRef<(ev: PointerEvent) => void>(() => undefined)
+  const dragUpRef = useRef<() => void>(() => undefined)
 
   const refresh = useCallback(() => bump((v) => v + 1), [])
 
@@ -391,26 +428,89 @@ export function FilePreview({ t, readFile, writeFile, watchFiles }: FilePreviewP
     }
   }, [isOpen])
 
+  // Apply the persisted width once the pane gets its first real layout: the
+  // saved px may exceed the CURRENT center column (window resized since the
+  // last drag), so clamp it against a live measurement before applying —
+  // otherwise a stale wide value would squeeze the chat seat to nothing.
+  useEffect(() => {
+    const saved = storedPreviewWidth()
+    if (saved === null) return
+    const preview = previewRef.current
+    const center = laidOutParent(preview)
+    if (preview === null || preview === undefined || center === null || center === undefined) return
+    const centerWidth = center.getBoundingClientRect().width
+    const max = Math.max(PREVIEW_MIN, centerWidth - CHAT_MIN)
+    setPreviewWidth(clamp(saved, PREVIEW_MIN, max))
+  }, [isOpen])
+
+  // Unmount during a drag (slot removed mid-drag): drop the window listeners
+  // so no stale move handler survives to rewrite widths in the next mount.
+  useEffect(() => () => {
+    window.removeEventListener('pointermove', dragMoveRef.current)
+    window.removeEventListener('pointerup', dragUpRef.current)
+    window.removeEventListener('pointercancel', dragUpRef.current)
+  }, [])
+
+  /**
+   * Start a split-width drag. Robustness notes (the "pane suddenly shrinks
+   * and freezes" bug class):
+   *
+   * - Pointer capture reroutes every later pointer event to the handle, so
+   *   `pointerup` fires EVEN when the mouse is released outside the window.
+   *   Without it the up event is lost, `onUp` never runs, and the leftover
+   *   `onMove` keeps rewriting the width from its stale baseline on every
+   *   mouse move anywhere on the page — that is the "cannot drag / cannot
+   *   restore" state.
+   * - `pointercancel` is cleaned up too (browser steals the pointer, e.g. a
+   *   tablet palm or an OS gesture).
+   * - Pointerdown defensively removes any previous listeners first, so even a
+   *   capture-less leftover cannot survive into a second drag.
+   * - The max is re-measured every move: the chat minimum is relative to the
+   *   CURRENT center column, which can change while the drag is in flight.
+   */
   const onHandleDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault()
     const handle = handleRef.current
     const preview = previewRef.current
     if (handle === null || preview === null) return
-    const center = handle.parentElement
+    // NOT handle.parentElement: the slot wrapper is `display: contents` and
+    // measures 0×0 — the flex container to clamp against is one level up (see
+    // laidOutParent). Measuring the wrapper made every drag snap to
+    // PREVIEW_MIN and then stick (the reported "sudden shrink / can't drag").
+    const center = laidOutParent(handle)
     if (center === null) return
     const startX = e.clientX
     const startWidth = preview.getBoundingClientRect().width
-    const centerWidth = center.getBoundingClientRect().width
-    const max = Math.max(PREVIEW_MIN, centerWidth - CHAT_MIN)
     const onMove = (ev: PointerEvent) => {
-      setPreviewWidth(clamp(startWidth + ev.clientX - startX, PREVIEW_MIN, max))
+      const centerWidth = center.getBoundingClientRect().width
+      const max = Math.max(PREVIEW_MIN, centerWidth - CHAT_MIN)
+      const width = clamp(startWidth + ev.clientX - startX, PREVIEW_MIN, max)
+      setPreviewWidth(width)
+      try {
+        window.localStorage.setItem(PREVIEW_WIDTH_KEY, String(width))
+      } catch {
+        // storage unavailable — the width just won't persist across reloads
+      }
     }
     const onUp = () => {
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointermove', dragMoveRef.current)
+      window.removeEventListener('pointerup', dragUpRef.current)
+      window.removeEventListener('pointercancel', dragUpRef.current)
     }
+    // Defensive reset of any previous drag (see the doc comment above).
+    window.removeEventListener('pointermove', dragMoveRef.current)
+    window.removeEventListener('pointerup', dragUpRef.current)
+    window.removeEventListener('pointercancel', dragUpRef.current)
+    dragMoveRef.current = onMove
+    dragUpRef.current = onUp
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    try {
+      handle.setPointerCapture(e.pointerId)
+    } catch {
+      // Pointer capture unsupported — the window listeners still cover the drag.
+    }
   }, [])
 
   const onSave = useCallback(async () => {

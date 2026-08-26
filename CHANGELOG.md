@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.0.13] - 2026-08-26
+
+### Fixed
+
+- **预览分栏宽度拖拽：一拖就骤然缩小到最窄，之后无法拖动、无法复原**。根因：
+  拖拽计算"预览最大宽度"时用 `handle.parentElement` 测量中间列宽度，但 slot 系统把
+  slot 内容包在一层 `display: contents` 的包装元素里——该包装层不参与布局，
+  `getBoundingClientRect().width` 恒为 **0**，于是
+  `max = max(240, 0 - 240) = 240`，第一次 `pointermove` 就把宽度钳到最小宽度 240，
+  之后每次移动都被钳在 240，表现为骤然缩小且拖不回来（100% 复现，与窗口/鼠标操作
+  无关）。修复：`laidOutParent()` 跳过所有 `display: contents` 层，取真正参与布局的
+  flex 容器（中间列）再测量；持久化宽度恢复时同样用它校准。
+- 拖拽健壮性（防同类"卡死"）：`setPointerCapture` 保证 `pointerup` 在指针移出窗口后
+  也能派发并清理监听器；监听 `pointercancel`；每次 `pointerdown` 防御性移除上一次
+  残留的监听器；组件卸载时清理窗口监听器；拖拽中每步实时重测中间列宽度。
+
+### Added
+
+- **预览宽度持久化**：拖拽后的分栏宽度写入 localStorage，刷新/重开会话后恢复
+  （自动按当前窗宽 clamp 在有效区间内）。
+
+
 ## [0.0.12] - 2026-08-25
 
 - 相关插件段新增 dsh-plugin-windows-guard（Windows 环境防坑守则 skill 插件，互相引流）。

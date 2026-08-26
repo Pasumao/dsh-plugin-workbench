@@ -342,7 +342,27 @@ function ensureLayoutPatch(): void {
 const FILE_MENTION_PROMPT =
   'Workspace file mentions written by the file panel use the form `@.<relative-path>` (a `.\` or `./` prefix marks a path relative to the current session workspace root; both `\\` and `/` separators are accepted, and paths with spaces use the quoted form `@"<relative-path>"`, for example `@"\\.\\my plan.md"`). Treat any such mention as a file the user wants you to read or edit: resolve the path against the workspace root and act on it with the file tools (read, glob, grep, edit, write); never claim to have inspected a file you did not actually open.'
 
-/** File-mention grammar taught to the model (see the FILE_MENTION_PROMPT doc). */
+/**
+ * File-mention grammar taught to the model (see the FILE_MENTION_PROMPT doc).
+ * One section per agent fiber: existing agents at apply time plus every agent
+ * created later (agent/created). The core already contributes a generic "paths
+ * prefixed with @ are files" section (dsh-file-reference-local, order 99);
+ * order 100 puts this more specific grammar right after it.
+ */
+function installMentionPrompt(ctx: Context): void {
+  const teach = (agent: { ctx: Context }): void => {
+    agent.ctx.systemPrompt.section({
+      name: 'dsh-plugin-workbench:file-mention',
+      order: 100,
+      text: FILE_MENTION_PROMPT,
+    })
+  }
+  for (const agent of ctx.agents.list()) teach(agent)
+  ctx.on('agent/created', (payload: unknown) => {
+    const { agent } = payload as { agent: { ctx: Context } }
+    teach(agent)
+  })
+}
 
 /**
  * One filesystem-backed RPC endpoint pair. Reads never mutate; `signal`
