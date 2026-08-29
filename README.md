@@ -15,6 +15,7 @@
 
 > ✅ **开箱即用**：0.0.9 起布局补丁全自动——装完重启即生效；DSH 升级覆盖 bundle
 > 后插件会自动补回，无需任何手动操作（仅锚点失效时才需手动，见「配置」节）。
+> 0.0.15 起自动识别 npm 与 DSH Desktop 两种构建产物，**DSH Desktop 开箱即用**。
 
 装完你会看到：
 
@@ -73,15 +74,17 @@
 ## 配置
 
 无需环境变量或配置文件；布局补丁全自动（插件启动时自动检测并重跑
-`scripts/patch-layout.mjs`，幂等、非阻塞；针对 `dsh-client-ui-layout@0.1.0-rc.6`
-编写）：
+`scripts/patch-layout.mjs`，幂等、非阻塞；0.0.15 起自动识别同一版本的两种构建产物
+——npm 构建与 DSH Desktop 内置构建；锚点与编译产物字节级耦合，DSH 升级后如失配
+需更新锚点）：
 - **行为偏好**（自动换行、亮暗主题、标签布局、文件树展开状态）按工作区持久化，无需手动配置；
 - **文件操作通道**：经 loopback RPC `/dsh-plugin-files`，写操作显式以 `danger-full-access` 执行，无外部配置项。
 
 ## 安装
 
-> 布局补丁针对 `dsh-client-ui-layout@0.1.0-rc.6` 编写，其他版本需更新锚点。
-> 0.0.9 起插件启动时自动检测并重打补丁（详见「配置」节）。
+> 布局补丁锚点与 DSH 编译产物字节级耦合，DSH 升级后如失配需更新锚点；0.0.15 起
+> 自动识别 npm / DSH Desktop 两种构建产物，插件启动时自动检测并重打补丁
+> （详见「配置」节）。
 
 ```powershell
 # npm（推荐）
@@ -132,7 +135,9 @@ dsh plugin --profile web remove dsh-plugin-workbench
 - 图片预览走同源路由 `/dsh-plugin-files/raw/<path>`：仅响应图片扩展名，
   先经 `ctx.fs.resolve → stat`（沙箱一致的路径解析）再读取字节，20MB 上限
 - DSH 升级会覆盖布局 bundle；0.0.9 起插件启动时自动检测并重打补丁，
-  无需手动重跑；锚点失效时需更新 `scripts/patch-layout.mjs`
+  无需手动重跑；锚点失效时需更新 `scripts/patch-layout.mjs`（0.0.15 起锚点表分
+  npm / desktop-ci 两个构建变体自动探测，desktop-ci 变体存于
+  `scripts/layout-anchors.desktop-ci.json`）
 - 本仓库不包含 DSH 编译产物
 
 ## 参与贡献

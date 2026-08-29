@@ -8,6 +8,17 @@
  * this script performs precise, idempotent string replacements and verifies
  * every anchor landed. It backs up the original before the first write.
  *
+ * The same @deepseek-ai/dsh-client-ui-layout version ships as TWO different
+ * builds with byte-different output:
+ *   - "npm":        the npm-registry tarball (function bodies at 0 indent,
+ *                   literal `56`, LF-only line endings);
+ *   - "desktop-ci": the build packaged inside DSH Desktop's resources/app and
+ *                   cloned into its profile (2-tab indented computeColumns,
+ *                   `COLLAPSED_SIDEBAR_WIDTH` constant, one stray CRLF).
+ * Every variant shares all anchors except `computeColumns`; both variants are
+ * dry-run against the target and the first one whose anchors ALL match is
+ * applied. If none matches, the bundle changed again — update the anchors.
+ *
  * Usage:
  *   node scripts/patch-layout.mjs [--target <abs path to client.js>] [--force]
  *
@@ -19,6 +30,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 
+const SCRIPT_DIR = fileURLToPath(new URL('.', import.meta.url))
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const BACKUP_DIR = join(REPO_ROOT, 'patches', 'layout.backup')
 
@@ -242,7 +254,40 @@ const REPLACEMENTS = [
   },
 ]
 
+// desktop-ci variant: same table, with `computeColumns` swapped for the anchor
+// pair extracted mechanically from a real DSH Desktop packaged bundle.
+const DESKTOP_CI = JSON.parse(readFileSync(join(SCRIPT_DIR, 'layout-anchors.desktop-ci.json'), 'utf8'))
+const VARIANTS = [
+  { id: 'npm', replacements: REPLACEMENTS },
+  {
+    id: 'desktop-ci',
+    replacements: REPLACEMENTS.map((item) =>
+      item.id === 'computeColumns'
+        ? { id: 'computeColumns', anchor: DESKTOP_CI.anchor, replacement: DESKTOP_CI.replacement }
+        : item
+    ),
+  },
+]
+
 const PATCHED_MARKERS = ['"explorerCol": "pI_x6G_explorerCol"', 'setExplorer: (d, px) => {', 'renderSlot("explorer"', 'renderSlot("explorer.preview"', 'conversationSeat']
+
+function applyReplacements(original, replacements) {
+  let patched = original
+  const failures = []
+  for (const item of replacements) {
+    const count = countOccurrences(patched, item.anchor)
+    if (count === 0) {
+      failures.push(`${item.id}: anchor not found`)
+      continue
+    }
+    if (count > 1) {
+      failures.push(`${item.id}: anchor found ${count} times (expected exactly 1)`)
+      continue
+    }
+    patched = patched.replace(item.anchor, item.replacement)
+  }
+  return { patched, failures }
+}
 
 function main() {
   const target = resolve(targetArg ?? defaultTarget)
@@ -264,6 +309,19 @@ function main() {
     console.log('[patch-layout] --force: re-patching from the current file. Consider restoring the .orig backup first.')
   }
 
+  const trials = VARIANTS.map((variant) => ({ id: variant.id, ...applyReplacements(original, variant.replacements) }))
+  const chosen = trials.find((trial) => trial.failures.length === 0)
+  if (!chosen) {
+    console.error('[patch-layout] ABORTED — the bundle matches no known build variant:')
+    for (const trial of trials) {
+      console.error(`  variant "${trial.id}":`)
+      for (const failure of trial.failures) console.error(`    - ${failure}`)
+    }
+    console.error('[patch-layout] the dsh version may have changed; update the variant anchors in scripts/.')
+    process.exit(1)
+  }
+  console.log(`[patch-layout] build variant: ${chosen.id}`)
+
   mkdirSync(BACKUP_DIR, { recursive: true })
   const pristine = join(BACKUP_DIR, 'client.js.orig')
   if (!existsSync(pristine)) {
@@ -274,36 +332,14 @@ function main() {
     copyFileSync(real, join(BACKUP_DIR, `client.js.${stamp}.bak`))
   }
 
-  let patched = original
-  const failures = []
-  for (const item of REPLACEMENTS) {
-    const count = countOccurrences(patched, item.anchor)
-    if (count === 0) {
-      failures.push(`${item.id}: anchor not found`)
-      continue
-    }
-    if (count > 1) {
-      failures.push(`${item.id}: anchor found ${count} times (expected exactly 1)`)
-      continue
-    }
-    patched = patched.replace(item.anchor, item.replacement)
-  }
-
-  if (failures.length > 0) {
-    console.error('[patch-layout] ABORTED — the bundle does not match the expected compiled output:')
-    for (const failure of failures) console.error(`  - ${failure}`)
-    console.error('[patch-layout] the dsh version may have changed; update scripts/patch-layout.mjs anchors.')
-    process.exit(1)
-  }
-
-  const missingMarkers = PATCHED_MARKERS.filter((marker) => !patched.includes(marker))
+  const missingMarkers = PATCHED_MARKERS.filter((marker) => !chosen.patched.includes(marker))
   if (missingMarkers.length > 0) {
     console.error('[patch-layout] verification failed — missing markers:')
     for (const marker of missingMarkers) console.error(`  - ${marker}`)
     process.exit(1)
   }
 
-  writeFileSync(real, patched, 'utf8')
+  writeFileSync(real, chosen.patched, 'utf8')
   console.log(`[patch-layout] patched: ${real}`)
   console.log('[patch-layout] verified: explorerCol class, setExplorer action, explorer slot render.')
   console.log('[patch-layout] restart dsh web to serve the new bundle rev.')

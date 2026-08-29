@@ -16,6 +16,8 @@ Once installed, the DSH web GUI becomes a lightweight code editor.
 > ✅ **Works out of the box**: since 0.0.9 the layout patch is fully automated — it takes effect right after install and
 > restart; if a DSH upgrade overwrites the bundle, the plugin patches it back automatically, with no manual steps
 > required (manual action is only needed if the anchors break, see the "Configuration" section).
+> Since 0.0.15 both build flavors — the npm build and the DSH Desktop bundled build — are detected automatically, so
+> **DSH Desktop works out of the box** too.
 
 What you'll see after installing:
 
@@ -81,8 +83,9 @@ What you'll see after installing:
 ## Configuration
 
 No environment variables or config files needed; the layout patch is fully automated (the plugin automatically detects
-and re-runs `scripts/patch-layout.mjs` at startup — idempotent, non-blocking; written against
-`dsh-client-ui-layout@0.1.0-rc.6`):
+and re-runs `scripts/patch-layout.mjs` at startup — idempotent, non-blocking; since 0.0.15 both build flavors of the
+same version are detected automatically — the npm build and the DSH Desktop bundled build; anchors are byte-coupled to
+the compiled output, so a DSH upgrade that breaks them requires anchor updates):
 - **Behavior preferences** (word wrap, light/dark theme, tab layout, file tree expansion state) persist per workspace
   and need no manual configuration;
 - **File operation channel**: via the loopback RPC `/dsh-plugin-files`; write operations are executed explicitly under
@@ -90,9 +93,9 @@ and re-runs `scripts/patch-layout.mjs` at startup — idempotent, non-blocking; 
 
 ## Installation
 
-> The layout patch is written against `dsh-client-ui-layout@0.1.0-rc.6`; other versions require updating the anchors.
-> Since 0.0.9 the plugin detects and re-applies the patch automatically at startup (see the "Configuration" section
-> for details).
+> Layout-patch anchors are byte-coupled to the DSH compiled output; a DSH upgrade that breaks them requires anchor
+> updates. Since 0.0.15 both build flavors (npm / DSH Desktop) are detected automatically and the patch re-applies at
+> startup (see the "Configuration" section for details).
 
 ```powershell
 # npm (recommended)
@@ -146,6 +149,8 @@ dsh plugin --profile web remove dsh-plugin-workbench
   bytes, with a 20MB limit
 - DSH upgrades overwrite the layout bundle; since 0.0.9 the plugin detects and re-applies the patch automatically at
   startup, so there is no need to re-run it manually; if the anchors break, `scripts/patch-layout.mjs` must be updated
+  (since 0.0.15 the anchor table carries two build variants auto-detected per target — npm and desktop-ci, the latter
+  stored in `scripts/layout-anchors.desktop-ci.json`)
 - This repository does not include DSH build artifacts
 
 ## Contributing

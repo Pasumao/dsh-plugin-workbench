@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.0.15] - 2026-08-29
+
+### Fixed
+
+- **DSH Desktop 下文件树列不显示（[issue #1](https://github.com/Pasumao/dsh-plugin-workbench/issues/1)）**：
+  布局补丁的锚点按 npm 构建的编译产物逐字节写死，而 DSH Desktop 安装包内置的
+  `dsh-client-ui-layout` 是同一版本的另一构建产物（保留注释、缩进不同、折叠侧栏宽度用
+  `COLLAPSED_SIDEBAR_WIDTH` 常量），`computeColumns` 锚点失配导致补丁每次启动整体放弃——
+  插件加载正常但界面永远不出现。补丁脚本现按目标文件自动探测构建变体（npm / desktop-ci，
+  后者锚点存于 `scripts/layout-anchors.desktop-ci.json`），两种产物都能正确打补丁。
+
 ## [0.0.14] - 2026-08-29
 
 - 文档：对标生态头部插件优化 README（首屏新增「装完你会看到」；布局补丁话术改为开箱即用）；
