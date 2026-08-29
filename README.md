@@ -6,6 +6,8 @@
 ![Stars](https://img.shields.io/github/stars/Pasumao/dsh-plugin-workbench?style=social)
 ![AI Assisted](https://img.shields.io/badge/AI-Assisted-8A2BE2)
 
+[**中文**](./README.md) | [English](./README.en.md)
+
 **能直接改文件的 VS Code 风格工作台**——不是只读预览：文件树 + 可编辑代码预览
 （语法高亮、标签页、行号栏）+ 右键文件操作（新建 / 重命名 / 删除 / 复制 / 剪切 /
 粘贴 / 在系统中打开 / 在资源管理器打开）+ 图片内联预览，每个工作区独立保存状态。
@@ -19,6 +21,12 @@
 - 左侧多出**文件树侧栏**（懒加载 + 2 秒自动刷新，每工作区独立展开状态）；
 - 消息里的 `@相对路径` 变成**可点击链接**，点开直接在工作台预览；
 - 把文件从左栏**拖进聊天区**，路径自动插入输入框。
+
+## 效果图
+
+![workbench 实机截图：DSH 网页内的文件树与可编辑预览](docs/workbench-webgui.png)
+
+> 真实 Web GUI 截图。
 
 ## 功能
 
