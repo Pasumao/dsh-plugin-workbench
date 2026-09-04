@@ -158,6 +158,15 @@ dsh plugin --profile web remove dsh-plugin-workbench
 See [CONTRIBUTING](./CONTRIBUTING.md) and [CODE_OF_CONDUCT](./CODE_OF_CONDUCT.md); the changelog is in
 [CHANGELOG](./CHANGELOG.md).
 
+## Compatibility
+
+- Tested on DSH `0.1.2-rc.1` (since 0.0.16 the layout patch anchors are adapted to that
+  version: the detailsCol border style changed from `1px/--dsw-alias-border-l2` to
+  `.5px/--dsw-alias-border-l3`, and the DetailsColumn children gained a `SessionProvider`
+  wrapper); for 0.1.1-rc.2 and earlier, use the 0.0.15 anchor table.
+- Since 0.0.9 the plugin re-applies the layout patch automatically at startup, so DSH
+  upgrades normally need no manual action; on anchor mismatch the startup log shows
+  `ui-layout patch exited 1` — upgrading this plugin fixes it.
 ## Related plugins
 
 This plugin is part of **Pasumao's dsh plugin ecosystem**; the published plugins in the same series can be used

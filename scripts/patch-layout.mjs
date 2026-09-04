@@ -48,8 +48,8 @@ const L = (...lines) => lines.join('\n')
 const REPLACEMENTS = [
   {
     id: 'css.explorerCol.rule',
-    anchor: '.pI_x6G_detailsCol{border-left:1px solid var(--dsw-alias-border-l2);min-width:0;overflow:hidden}',
-    replacement: '.pI_x6G_detailsCol{border-left:1px solid var(--dsw-alias-border-l2);min-width:0;overflow:hidden}.pI_x6G_explorerCol{background:var(--dsw-specific-sidebar-fill);border-right:1px solid var(--dsw-alias-border-l1);min-width:0;overflow:hidden}',
+    anchor: '.pI_x6G_detailsCol{border-left:.5px solid var(--dsw-alias-border-l3);min-width:0;overflow:hidden}',
+    replacement: '.pI_x6G_detailsCol{border-left:.5px solid var(--dsw-alias-border-l3);min-width:0;overflow:hidden}.pI_x6G_explorerCol{background:var(--dsw-specific-sidebar-fill);border-right:.5px solid var(--dsw-alias-border-l3);min-width:0;overflow:hidden}',
   },
   {
     id: 'css.explorerCol.handleContent',
@@ -174,7 +174,7 @@ const REPLACEMENTS = [
   },
   {
     id: 'appframe.explorerColumn',
-    anchor: '\t\t\t\t\t(0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(CenterColumn, { children: renderSlot("conversation", {}) }), (0, react_jsx_runtime.jsx)(DetailsColumn, { children: renderSlot("details", {}) })] }),',
+    anchor: '\t\t\t\t\t(0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(CenterColumn, { children: renderSlot("conversation", {}) }), (0, react_jsx_runtime.jsx)(DetailsColumn, { children: (0, react_jsx_runtime.jsx)(SessionProvider, { children: renderSlot("details", {}) }) })] }),',
     replacement: L(
       '\t\t\t\t\t(0, react_jsx_runtime.jsx)("div", {',
       '\t\t\t\t\t\tclassName: AppFrame_module_css_default.explorerCol,',
@@ -182,7 +182,7 @@ const REPLACEMENTS = [
       '\t\t\t\t\t\t\twidth: cols.explorer',
       '\t\t\t\t\t\t})',
       '\t\t\t\t\t}),',
-      '\t\t\t\t\t(0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(CenterColumn, { children: renderSlot("conversation", {}) }), (0, react_jsx_runtime.jsx)(DetailsColumn, { children: renderSlot("details", {}) })] }),',
+      '\t\t\t\t\t(0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)(CenterColumn, { children: renderSlot("conversation", {}) }), (0, react_jsx_runtime.jsx)(DetailsColumn, { children: (0, react_jsx_runtime.jsx)(SessionProvider, { children: renderSlot("details", {}) }) })] }),',
     ),
   },
   {

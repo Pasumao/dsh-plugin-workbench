@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.0.16] - 2026-09-04
+
+### Fixed
+
+- **适配 dsh 0.1.2-rc.1 布局 bundle**：两处补丁锚点失配导致插件启动时自动重打失败
+  （启动日志 `ui-layout patch exited 1`，explorer 布局不生效）。⑴ `css.explorerCol.rule`：
+  detailsCol 边框样式 `border-left:1px solid var(--dsw-alias-border-l2)` 在新版改为
+  `.5px solid var(--dsw-alias-border-l3)`，锚点与注入规则同步更新；⑵
+  `appframe.explorerColumn`：DetailsColumn 的 children 在新版被 `SessionProvider`
+  包裹，锚点按新结构更新。其余 22 个锚点与 `computeColumns` 函数体逐字节未变。
+# Changelog
+
 ## [0.0.15] - 2026-08-29
 
 ### Fixed
