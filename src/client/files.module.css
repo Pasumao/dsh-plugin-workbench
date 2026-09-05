@@ -997,18 +997,6 @@
   font-weight: inherit;
 }
 
-/* ---- Skin chrome fix ----
-   Shift the maid-atelier fixed top/bottom trim past the explorer column and
-   the split preview, so it only decorates the chat instead of overlaying the
-   file column, preview header/buttons, or file content. */
-body[data-dsh-maid-atelier] [data-skin-chrome=top-trim] {
-  translate: calc(var(--maid-sidebar-width, 0px) + var(--dsh-explorer-width, 0px) + var(--dsh-preview-width, 0px)) 0 !important;
-}
-
-body[data-dsh-maid-atelier] [data-skin-chrome=bottom-trim] {
-  translate: calc(var(--maid-sidebar-width, 0px) + var(--dsh-explorer-width, 0px) + var(--dsh-preview-width, 0px)) 0 !important;
-}
-
 [class*='explorerCol'] {
   border-right: 1px solid var(--fe-border) !important;
 }

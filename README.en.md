@@ -1,12 +1,17 @@
-[中文](./README.md) | **English**
+<p align="center">
+  <img src="docs/banner.svg" alt="dsh-plugin-workbench banner" width="100%">
+</p>
 
 # dsh-plugin-workbench
 
 ![npm version](https://img.shields.io/npm/v/dsh-plugin-workbench)
-![License](https://img.shields.io/github/license/Pasumao/dsh-plugin-workbench)
+![npm downloads](https://img.shields.io/npm/dm/dsh-plugin-workbench)
 ![CI](https://img.shields.io/github/actions/workflow/status/Pasumao/dsh-plugin-workbench/ci.yml?branch=main)
+![License](https://img.shields.io/github/license/Pasumao/dsh-plugin-workbench)
 ![Stars](https://img.shields.io/github/stars/Pasumao/dsh-plugin-workbench?style=social)
 ![AI Assisted](https://img.shields.io/badge/AI-Assisted-8A2BE2)
+
+[中文](./README.md) | **English**
 
 **A VS Code-style workbench that edits files directly** — not a read-only preview: file tree + editable code preview
 (syntax highlighting, tabs, line-number gutter) + right-click file operations (new / rename / delete / copy / cut /

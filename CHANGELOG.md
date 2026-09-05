@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.0.17] - 2026-09-05
+
+### Fixed
+
+- **与 maid-atelier 皮肤同装时，页面顶部/底部装饰横条从画面一半才开始显示**。
+  根因：本插件 CSS 末尾一段旧「skin chrome fix」规则（`translate: calc(var(--maid-sidebar-width) +
+  var(--dsh-explorer-width) + var(--dsh-preview-width))`）写于皮肤装饰条还是
+  `position: fixed` 钉满整窗的时期，用来把它推过侧栏和文件列；maid-atelier 升级到
+  上游 78722ef 后装饰条改为挂在会话列内部的绝对定位元素（本就从列左缘开始），
+  这条规则反而造成双重偏移（列左缘 540px + translate 540px = 从 x≈1080 起画，
+  右半截伸出屏幕外）。已整段删除——装饰条定位由皮肤自持，插件不再外部平移。
+
+### Changed
+
+- README：首屏新增横幅图（`docs/banner.svg`），徽章顺序调整并补充 npm downloads。
+
 ## [0.0.16] - 2026-09-04
 
 ### Fixed
@@ -10,7 +26,6 @@
   `.5px solid var(--dsw-alias-border-l3)`，锚点与注入规则同步更新；⑵
   `appframe.explorerColumn`：DetailsColumn 的 children 在新版被 `SessionProvider`
   包裹，锚点按新结构更新。其余 22 个锚点与 `computeColumns` 函数体逐字节未变。
-# Changelog
 
 ## [0.0.15] - 2026-08-29
 
