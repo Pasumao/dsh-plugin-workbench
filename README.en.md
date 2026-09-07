@@ -141,8 +141,18 @@ pnpm run typecheck
 
 ```powershell
 dsh plugin --profile web remove dsh-plugin-workbench
-# and restore the layout bundle (patches/layout.backup/client.js.orig → dsh-client-ui-layout/lib/client.js)
+# optional but recommended: restore the layout bundle to the stock dsh file
+node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs --restore
+# restart dsh web
 ```
+
+> Skipping `--restore` is fine too: since 0.0.18 the layout patch is adaptive —
+> the explorer column auto-collapses (width 0) whenever no plugin contributes to
+> the `explorer` / `explorer.preview` slots, so an uninstall leaves no empty
+> column behind. `--restore` simply returns the bundle to its pristine,
+> unpatched state. The script has two safety guards: it refuses to restore when
+> the target already looks like a newer pristine bundle (just-upgraded dsh) or
+> when the backup belongs to an older dsh version (`--force` overrides).
 
 ## Notes
 

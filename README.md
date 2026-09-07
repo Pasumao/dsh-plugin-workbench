@@ -130,8 +130,16 @@ pnpm run typecheck
 
 ```powershell
 dsh plugin --profile web remove dsh-plugin-workbench
-# 并还原布局 bundle（patches/layout.backup/client.js.orig → dsh-client-ui-layout/lib/client.js）
+# 可选：把布局 bundle 还原为官方原始版本（推荐，卸载后干净如初）
+node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs --restore
+# 重启 dsh web
 ```
+
+> 不跑 `--restore` 也没关系：0.0.18 起布局补丁会自适应——explorer 列在没有插件
+> 往 `explorer` / `explorer.preview` 插槽注册内容时自动收起（宽度归 0），
+> 卸载后不会残留空列。`--restore` 只是把它还原成完全未打补丁的原始 bundle。
+> 脚本带两道防呆：目标看起来已是未打补丁的新版 bundle（dsh 刚升级过）、或备份
+> 属于更旧的 dsh 版本时，会拒绝回滚并提示（`--force` 可强行恢复）。
 
 ## 说明
 

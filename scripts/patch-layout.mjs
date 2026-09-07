@@ -21,6 +21,14 @@
  *
  * Usage:
  *   node scripts/patch-layout.mjs [--target <abs path to client.js>] [--force]
+ *   node scripts/patch-layout.mjs [--target <abs path to client.js>] --restore
+ *
+ * --restore copies the pristine backup (patches/layout.backup/client.js.orig,
+ * written by the first successful patch) back over the target — the uninstall
+ * recovery path: after removing this plugin, run this once and restart dsh web
+ * to get the stock dsh-client-ui-layout bundle back. Without it a leftover
+ * patch is harmless since 0.0.18 (the explorer column auto-hides when no
+ * plugin contributes to its slots), but restoring is the clean state.
  *
  * Default target resolves the profile junction to its npx-cache copy:
  *   <DSH_HOME>/profiles/node_modules/@deepseek-ai/dsh-client-ui-layout/lib/client.js
@@ -37,6 +45,7 @@ const BACKUP_DIR = join(REPO_ROOT, 'patches', 'layout.backup')
 const args = process.argv.slice(2)
 const targetArg = args.includes('--target') ? args[args.indexOf('--target') + 1] : undefined
 const force = args.includes('--force')
+const restore = args.includes('--restore')
 
 const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const defaultTarget = join(dshHome, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-client-ui-layout', 'lib', 'client.js')
@@ -125,17 +134,27 @@ const REPLACEMENTS = [
   {
     id: 'store.init.explorer',
     anchor: '\t\t\t\t\tsidebar: 280,\n\t\t\t\t\tdetails: 0,',
-    replacement: '\t\t\t\t\tsidebar: 280,\n\t\t\t\t\texplorer: 260,\n\t\t\t\t\tdetails: 0,',
+    replacement: '\t\t\t\t\tsidebar: 280,\n\t\t\t\t\texplorer: 260,\n\t\t\t\t\texplorerOccupied: false,\n\t\t\t\t\tdetails: 0,',
   },
   {
     id: 'store.action.setExplorer',
     anchor: '\t\t\t\t\tsetDetails: (d, px) => {\n\t\t\t\t\t\td.details = clampWidth(px, 300, 520);\n\t\t\t\t\t},',
-    replacement: '\t\t\t\t\tsetDetails: (d, px) => {\n\t\t\t\t\t\td.details = clampWidth(px, 300, 520);\n\t\t\t\t\t},\n\t\t\t\t\tsetExplorer: (d, px) => {\n\t\t\t\t\t\td.explorer = clampWidth(px, 200, 420);\n\t\t\t\t\t},',
+    replacement: '\t\t\t\t\tsetDetails: (d, px) => {\n\t\t\t\t\t\td.details = clampWidth(px, 300, 520);\n\t\t\t\t\t},\n\t\t\t\t\tsetExplorer: (d, px) => {\n\t\t\t\t\t\td.explorer = clampWidth(px, 200, 420);\n\t\t\t\t\t},\n\t\t\t\t\tsetExplorerOccupied: (d, occupied) => {\n\t\t\t\t\t\td.explorerOccupied = occupied;\n\t\t\t\t\t},',
+  },
+  {
+    id: 'controller.setExplorerOccupied',
+    anchor: '\t\t\tcloseDetails() {\n\t\t\t\tthis.#require().closeDetails();\n\t\t\t}',
+    replacement: '\t\t\tcloseDetails() {\n\t\t\t\tthis.#require().closeDetails();\n\t\t\t}\n\t\t\tsetExplorerOccupied(occupied) {\n\t\t\t\tif (this.#panels !== void 0) this.#panels.setExplorerOccupied(occupied);\n\t\t\t}',
+  },
+  {
+    id: 'apply.explorerOccupancy',
+    anchor: '\t\t\t\treturn () => {\n\t\t\t\t\tdisposeRegistration();\n\t\t\t\t\tdisposeService();\n\t\t\t\t};\n\t\t\t}, "ui-layout: service + root registration");',
+    replacement: '\t\t\t\treturn () => {\n\t\t\t\t\tdisposeRegistration();\n\t\t\t\t\tdisposeService();\n\t\t\t\t};\n\t\t\t}, "ui-layout: service + root registration");\n\t\t\tctx.effect(() => {\n\t\t\t\tconst syncExplorer = () => {\n\t\t\t\t\tlayout.setExplorerOccupied(ctx.slots.entries("explorer").length > 0 || ctx.slots.entries("explorer.preview").length > 0);\n\t\t\t\t};\n\t\t\t\tsyncExplorer();\n\t\t\t\treturn ctx.on("slots/changed", syncExplorer);\n\t\t\t}, "ui-layout: explorer occupancy sync");',
   },
   {
     id: 'appframe.computeCall',
     anchor: 'const cols = computeColumns(viewport, sidebarCollapsed ? 0 : panels.sidebar === 0 ? 280 : panels.sidebar, detailsSession === void 0 ? 0 : panels.details);',
-    replacement: 'const explorerEffective = narrow ? 0 : panels.explorer;\n\t\t\tconst cols = computeColumns(viewport, sidebarCollapsed ? 0 : panels.sidebar === 0 ? 280 : panels.sidebar, explorerEffective, detailsSession === void 0 ? 0 : panels.details);',
+    replacement: 'const explorerEffective = narrow || !panels.explorerOccupied ? 0 : panels.explorer;\n\t\t\tconst cols = computeColumns(viewport, sidebarCollapsed ? 0 : panels.sidebar === 0 ? 280 : panels.sidebar, explorerEffective, detailsSession === void 0 ? 0 : panels.details);',
   },
   {
     id: 'appframe.explorerBase',
@@ -257,8 +276,45 @@ const REPLACEMENTS = [
 // desktop-ci variant: same table, with `computeColumns` swapped for the anchor
 // pair extracted mechanically from a real DSH Desktop packaged bundle.
 const DESKTOP_CI = JSON.parse(readFileSync(join(SCRIPT_DIR, 'layout-anchors.desktop-ci.json'), 'utf8'))
+
+/**
+ * Delta table for bundles already carrying the PREVIOUS revision of this patch
+ * (explorer column without occupancy gating). Anchors exist only in that
+ * intermediate state, so these variants never match a pristine bundle — the
+ * full variants above win there. Same for both npm and desktop-ci builds:
+ * none of the delta anchors touch the `computeColumns` body.
+ */
+const DELTA_REPLACEMENTS = [
+  {
+    id: 'delta.appframe.computeCall',
+    anchor: 'const explorerEffective = narrow ? 0 : panels.explorer;',
+    replacement: 'const explorerEffective = narrow || !panels.explorerOccupied ? 0 : panels.explorer;',
+  },
+  {
+    id: 'delta.store.init',
+    anchor: '\t\t\t\t\texplorer: 260,\n\t\t\t\t\tdetails: 0,',
+    replacement: '\t\t\t\t\texplorer: 260,\n\t\t\t\t\texplorerOccupied: false,\n\t\t\t\t\tdetails: 0,',
+  },
+  {
+    id: 'delta.store.action',
+    anchor: '\t\t\t\t\tsetExplorer: (d, px) => {\n\t\t\t\t\t\td.explorer = clampWidth(px, 200, 420);\n\t\t\t\t\t},',
+    replacement: '\t\t\t\t\tsetExplorer: (d, px) => {\n\t\t\t\t\t\td.explorer = clampWidth(px, 200, 420);\n\t\t\t\t\t},\n\t\t\t\t\tsetExplorerOccupied: (d, occupied) => {\n\t\t\t\t\t\td.explorerOccupied = occupied;\n\t\t\t\t\t},',
+  },
+  {
+    id: 'delta.controller',
+    anchor: '\t\t\tcloseDetails() {\n\t\t\t\tthis.#require().closeDetails();\n\t\t\t}',
+    replacement: '\t\t\tcloseDetails() {\n\t\t\t\tthis.#require().closeDetails();\n\t\t\t}\n\t\t\tsetExplorerOccupied(occupied) {\n\t\t\t\tif (this.#panels !== void 0) this.#panels.setExplorerOccupied(occupied);\n\t\t\t}',
+  },
+  {
+    id: 'delta.apply',
+    anchor: '\t\t\t\treturn () => {\n\t\t\t\t\tdisposeRegistration();\n\t\t\t\t\tdisposeService();\n\t\t\t\t};\n\t\t\t}, "ui-layout: service + root registration");',
+    replacement: '\t\t\t\treturn () => {\n\t\t\t\t\tdisposeRegistration();\n\t\t\t\t\tdisposeService();\n\t\t\t\t};\n\t\t\t}, "ui-layout: service + root registration");\n\t\t\tctx.effect(() => {\n\t\t\t\tconst syncExplorer = () => {\n\t\t\t\t\tlayout.setExplorerOccupied(ctx.slots.entries("explorer").length > 0 || ctx.slots.entries("explorer.preview").length > 0);\n\t\t\t\t};\n\t\t\t\tsyncExplorer();\n\t\t\t\treturn ctx.on("slots/changed", syncExplorer);\n\t\t\t}, "ui-layout: explorer occupancy sync");',
+  },
+]
+
 const VARIANTS = [
   { id: 'npm', replacements: REPLACEMENTS },
+  { id: 'npm-delta', replacements: DELTA_REPLACEMENTS },
   {
     id: 'desktop-ci',
     replacements: REPLACEMENTS.map((item) =>
@@ -267,9 +323,10 @@ const VARIANTS = [
         : item
     ),
   },
+  { id: 'desktop-ci-delta', replacements: DELTA_REPLACEMENTS },
 ]
 
-const PATCHED_MARKERS = ['"explorerCol": "pI_x6G_explorerCol"', 'setExplorer: (d, px) => {', 'renderSlot("explorer"', 'renderSlot("explorer.preview"', 'conversationSeat']
+const PATCHED_MARKERS = ['"explorerCol": "pI_x6G_explorerCol"', 'setExplorer: (d, px) => {', 'renderSlot("explorer"', 'renderSlot("explorer.preview"', 'conversationSeat', 'explorerOccupied']
 
 function applyReplacements(original, replacements) {
   let patched = original
@@ -300,6 +357,44 @@ function main() {
   const real = realpathSync(target)
   const original = readFileSync(real, 'utf8')
 
+  // Uninstall recovery: copy the pristine pre-patch bundle back over the
+  // target. Runs before every other check — restoring must work regardless of
+  // the current bundle's patch state.
+  if (restore) {
+    const pristine = join(BACKUP_DIR, 'client.js.orig')
+    if (!existsSync(pristine)) {
+      console.error('[patch-layout] no pristine backup found at ' + pristine)
+      console.error('[patch-layout] recover by reinstalling the package instead:')
+      console.error('  cd <dsh profile dir> && pnpm install   # (or upgrade dsh — the bundle ships with it)')
+      process.exit(1)
+    }
+    // Staleness guard 1: the target may be a NEWER pristine from a dsh upgrade
+    // (nothing to restore). Refuse unless --force.
+    const looksPatched = PATCHED_MARKERS.some((marker) => original.includes(marker))
+    // Staleness guard 2: the backup must itself be a pristine this script can
+    // still patch (an old-dsh backup is useless on a newer dsh — restoring it
+    // would be a silent downgrade). Refuse unless --force.
+    const backupText = readFileSync(pristine, 'utf8')
+    const backupPatchable = VARIANTS.filter((v) => v.id !== 'npm-delta' && v.id !== 'desktop-ci-delta')
+      .some((variant) => applyReplacements(backupText, variant.replacements).failures.length === 0)
+    if ((!looksPatched || !backupPatchable) && !force) {
+      if (!looksPatched) {
+        console.error('[patch-layout] target does not look patched — it may be a newer pristine bundle from a dsh upgrade.')
+      }
+      if (!backupPatchable) {
+        console.error('[patch-layout] the pristine backup predates the installed dsh version (its anchors no longer match).')
+        console.error('[patch-layout] recover by reinstalling the package instead:')
+        console.error('  cd <dsh profile dir> && pnpm install   # (or upgrade dsh — the bundle ships with it)')
+      }
+      console.error('[patch-layout] refusing a risky restore; pass --force to restore anyway.')
+      process.exit(1)
+    }
+    copyFileSync(pristine, real)
+    console.log(`[patch-layout] restored the pristine dsh-client-ui-layout bundle: ${real}`)
+    console.log('[patch-layout] restart dsh web to serve the restored bundle.')
+    return
+  }
+
   const alreadyPatched = PATCHED_MARKERS.every((marker) => original.includes(marker))
   if (alreadyPatched && !force) {
     console.log(`[patch-layout] already patched (${real}) — nothing to do.`)
@@ -324,9 +419,18 @@ function main() {
 
   mkdirSync(BACKUP_DIR, { recursive: true })
   const pristine = join(BACKUP_DIR, 'client.js.orig')
-  if (!existsSync(pristine)) {
+  // client.js.orig must hold the PRISTINE bundle of the CURRENT dsh version —
+  // it is what --restore hands back on uninstall. A dsh upgrade reverts the
+  // bundle to a fresh pristine, so whenever the pre-patch target itself looks
+  // unpatched, promote it (the previous orig belongs to an older dsh and would
+  // otherwise be restored over a newer install — a silent downgrade). Only a
+  // pre-patch state that already carries our markers gets the timestamped bak.
+  const targetLooksPatched = PATCHED_MARKERS.some((marker) => original.includes(marker))
+  const hadPristine = existsSync(pristine)
+  if (!hadPristine || !targetLooksPatched) {
     copyFileSync(real, pristine)
-    console.log(`[patch-layout] pristine backup written: ${pristine}`)
+    if (!hadPristine) console.log(`[patch-layout] pristine backup written: ${pristine}`)
+    else console.log('[patch-layout] pristine backup refreshed (dsh upgrade detected — the old orig was a different version).')
   } else {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     copyFileSync(real, join(BACKUP_DIR, `client.js.${stamp}.bak`))

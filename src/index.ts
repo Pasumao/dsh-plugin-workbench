@@ -266,6 +266,9 @@ const LAYOUT_PATCH_MARKERS = [
   'setExplorer: (d, px) => {',
   'renderSlot("explorer"',
   'conversationSeat',
+  // 0.0.18+: occupancy gating — the explorer column must auto-hide when no
+  // plugin contributes to the explorer / explorer.preview slots (issue #2).
+  'explorerOccupied',
 ] as const
 
 /** Resolve the installed dsh-client-ui-layout client bundle (profile node_modules junction). */

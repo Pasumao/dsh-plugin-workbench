@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.0.18] - 2026-09-07
+
+### Fixed
+
+- **卸载插件后残留一条空白侧边栏（[issue #2](https://github.com/Pasumao/dsh-plugin-workbench/issues/2)）**。
+  根因：布局补丁给 `dsh-client-ui-layout` 注入的第四列（explorer）是无条件渲染的——
+  网格轨道恒为 `panels.explorer`（默认 260px，带侧栏底色与右边框），列内容来自本插件注册的
+  `explorer` 插槽；卸载本插件后插槽清空，但补丁仍留在布局 bundle 里（且插件的
+  `ensureLayoutPatch` 自愈机制还会在下次启动把补丁打回去），于是永远残留一条空列，
+  刷新/重启都无法消除。修复：布局 store 新增 `explorerOccupied` 标志，`ui-layout` 的
+  apply 现在监听 `slots/changed` 事件，实时统计 `explorer` / `explorer.preview` 插槽的
+  注册条目数——没有任何插件贡献时列宽归 0 自动收起，装回插件即刻恢复。
+  补丁脚本新增 **delta 变体**（`npm-delta` / `desktop-ci-delta`）：已带旧版补丁的 bundle
+  无需还原即可原地升级到带 occupancy 门槛的新补丁；全新 bundle 走原有完整变体。
+  `src/index.ts` 的自愈 marker 列表同步追加 `explorerOccupied`。
+  同时新增 `patch-layout.mjs --restore`（卸载恢复命令）：用首次打补丁时备份的
+  pristine 副本把 `dsh-client-ui-layout` 还原为官方原始 bundle；备份策略改为
+  「dsh 升级后首次重打时自动刷新 pristine」，并带两道防呆（目标是更新的原生 bundle、
+  或备份属于更旧 dsh 版本时拒绝回滚，`--force` 覆盖）。
+
 ## [0.0.17] - 2026-09-05
 
 ### Fixed
