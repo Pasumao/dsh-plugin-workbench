@@ -268,7 +268,11 @@ const LAYOUT_PATCH_MARKERS = [
   'conversationSeat',
   // 0.0.18+: occupancy gating — the explorer column must auto-hide when no
   // plugin contributes to the explorer / explorer.preview slots (issue #2).
+  // 0.0.19: the sync must ALSO run inside the root registration's inject hook —
+  // apply-time sync lands before attachPanels (a no-op) and after the one-shot
+  // registration emit, so without this the column stayed collapsed forever.
   'explorerOccupied',
+  'entries("explorer").length + ctx.slots',
 ] as const
 
 /** Resolve the installed dsh-client-ui-layout client bundle (profile node_modules junction). */

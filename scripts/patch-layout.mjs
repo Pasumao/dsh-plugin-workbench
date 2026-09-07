@@ -148,6 +148,11 @@ const REPLACEMENTS = [
   },
   {
     id: 'apply.explorerOccupancy',
+    anchor: '\t\t\t\t\tinject: (actions) => {\n\t\t\t\t\t\tlayout.attachPanels(actions);\n\t\t\t\t\t\treturn {};\n\t\t\t\t\t}',
+    replacement: '\t\t\t\t\tinject: (actions) => {\n\t\t\t\t\t\tlayout.attachPanels(actions);\n\t\t\t\t\t\tlayout.setExplorerOccupied(ctx.slots.entries("explorer").length + ctx.slots.entries("explorer.preview").length > 0);\n\t\t\t\t\t\treturn {};\n\t\t\t\t\t}',
+  },
+  {
+    id: 'apply.explorerOccupancyWatch',
     anchor: '\t\t\t\treturn () => {\n\t\t\t\t\tdisposeRegistration();\n\t\t\t\t\tdisposeService();\n\t\t\t\t};\n\t\t\t}, "ui-layout: service + root registration");',
     replacement: '\t\t\t\treturn () => {\n\t\t\t\t\tdisposeRegistration();\n\t\t\t\t\tdisposeService();\n\t\t\t\t};\n\t\t\t}, "ui-layout: service + root registration");\n\t\t\tctx.effect(() => {\n\t\t\t\tconst syncExplorer = () => {\n\t\t\t\t\tlayout.setExplorerOccupied(ctx.slots.entries("explorer").length > 0 || ctx.slots.entries("explorer.preview").length > 0);\n\t\t\t\t};\n\t\t\t\tsyncExplorer();\n\t\t\t\treturn ctx.on("slots/changed", syncExplorer);\n\t\t\t}, "ui-layout: explorer occupancy sync");',
   },
@@ -307,14 +312,19 @@ const DELTA_REPLACEMENTS = [
   },
   {
     id: 'delta.apply',
-    anchor: '\t\t\t\treturn () => {\n\t\t\t\t\tdisposeRegistration();\n\t\t\t\t\tdisposeService();\n\t\t\t\t};\n\t\t\t}, "ui-layout: service + root registration");',
-    replacement: '\t\t\t\treturn () => {\n\t\t\t\t\tdisposeRegistration();\n\t\t\t\t\tdisposeService();\n\t\t\t\t};\n\t\t\t}, "ui-layout: service + root registration");\n\t\t\tctx.effect(() => {\n\t\t\t\tconst syncExplorer = () => {\n\t\t\t\t\tlayout.setExplorerOccupied(ctx.slots.entries("explorer").length > 0 || ctx.slots.entries("explorer.preview").length > 0);\n\t\t\t\t};\n\t\t\t\tsyncExplorer();\n\t\t\t\treturn ctx.on("slots/changed", syncExplorer);\n\t\t\t}, "ui-layout: explorer occupancy sync");',
+    anchor: '\t\t\t\t\tinject: (actions) => {\n\t\t\t\t\t\tlayout.attachPanels(actions);\n\t\t\t\t\t\treturn {};\n\t\t\t\t\t}',
+    replacement: '\t\t\t\t\tinject: (actions) => {\n\t\t\t\t\t\tlayout.attachPanels(actions);\n\t\t\t\t\t\tlayout.setExplorerOccupied(ctx.slots.entries("explorer").length + ctx.slots.entries("explorer.preview").length > 0);\n\t\t\t\t\t\treturn {};\n\t\t\t\t\t}',
   },
 ]
+
+/** Delta #2: bundles carrying the FIRST occupancy delta (watch effect only, no
+ * inject-hook sync). Just the inject-hook injection; the watch block already exists. */
+const DELTA2_REPLACEMENTS = DELTA_REPLACEMENTS.filter((item) => item.id === 'delta.apply')
 
 const VARIANTS = [
   { id: 'npm', replacements: REPLACEMENTS },
   { id: 'npm-delta', replacements: DELTA_REPLACEMENTS },
+  { id: 'npm-delta2', replacements: DELTA2_REPLACEMENTS },
   {
     id: 'desktop-ci',
     replacements: REPLACEMENTS.map((item) =>
@@ -324,9 +334,10 @@ const VARIANTS = [
     ),
   },
   { id: 'desktop-ci-delta', replacements: DELTA_REPLACEMENTS },
+  { id: 'desktop-ci-delta2', replacements: DELTA2_REPLACEMENTS },
 ]
 
-const PATCHED_MARKERS = ['"explorerCol": "pI_x6G_explorerCol"', 'setExplorer: (d, px) => {', 'renderSlot("explorer"', 'renderSlot("explorer.preview"', 'conversationSeat', 'explorerOccupied']
+const PATCHED_MARKERS = ['"explorerCol": "pI_x6G_explorerCol"', 'setExplorer: (d, px) => {', 'renderSlot("explorer"', 'renderSlot("explorer.preview"', 'conversationSeat', 'explorerOccupied', 'entries("explorer").length + ctx.slots']
 
 function applyReplacements(original, replacements) {
   let patched = original

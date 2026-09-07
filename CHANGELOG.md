@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.0.19] - 2026-09-07
+
+### Fixed
+
+- **0.0.18 的 occupancy 门控把列永久收起了（装着插件也不显示 explorer 列）**。
+  根因是时序：布局 store 的 actions 要到 root entry **首次渲染组装**时才经
+  `inject` hook 交给 `LayoutController`（`attachPanels`），而 0.0.18 把初始
+  occupancy 同步放在了 ui-layout 的 apply 阶段——那时 `#panels` 还是 undefined，
+  同步被空实现吞掉；workbench 的注册又恰好发生在同一调用栈内（声明提交触发），
+  `slots/changed` 事件在监听器安装之前就已发完，之后再无事件 → `explorerOccupied`
+  恒为 false → 列永不出现。修复：occupancy 同步**同时**放进 root 注册的 inject
+  hook（actions 刚 bind、首帧渲染前，此时插槽查询已能拿到已注册条目），
+  `slots/changed` 监听继续负责运行时装卸；补丁脚本对应新增 `npm-delta2` /
+  `desktop-ci-delta2` 变体与 marker。
+
 ## [0.0.18] - 2026-09-07
 
 ### Fixed
