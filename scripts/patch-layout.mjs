@@ -159,7 +159,12 @@ const REPLACEMENTS = [
   {
     id: 'appframe.computeCall',
     anchor: 'const cols = computeColumns(viewport, sidebarCollapsed ? 0 : panels.sidebar === 0 ? 280 : panels.sidebar, detailsSession === void 0 ? 0 : panels.details);',
-    replacement: 'const explorerEffective = narrow || !panels.explorerOccupied ? 0 : panels.explorer;\n\t\t\tconst cols = computeColumns(viewport, sidebarCollapsed ? 0 : panels.sidebar === 0 ? 280 : panels.sidebar, explorerEffective, detailsSession === void 0 ? 0 : panels.details);',
+    // `panels.details > 0` (details explicitly opened) collapses the explorer
+    // column so the crowding solve keeps the STOCK width budget: with the
+    // 260px explorer column parked in, the details pane needs a ~1480px
+    // viewport instead of the stock ~1220px and gets squeezed to 0 — "open
+    // details flashes and vanishes" (the user-visible regression).
+    replacement: 'const explorerEffective = narrow || !panels.explorerOccupied || panels.details > 0 ? 0 : panels.explorer;\n\t\t\tconst cols = computeColumns(viewport, sidebarCollapsed ? 0 : panels.sidebar === 0 ? 280 : panels.sidebar, explorerEffective, detailsSession === void 0 ? 0 : panels.details);',
   },
   {
     id: 'appframe.explorerBase',
@@ -293,7 +298,7 @@ const DELTA_REPLACEMENTS = [
   {
     id: 'delta.appframe.computeCall',
     anchor: 'const explorerEffective = narrow ? 0 : panels.explorer;',
-    replacement: 'const explorerEffective = narrow || !panels.explorerOccupied ? 0 : panels.explorer;',
+    replacement: 'const explorerEffective = narrow || !panels.explorerOccupied || panels.details > 0 ? 0 : panels.explorer;',
   },
   {
     id: 'delta.store.init',
@@ -322,14 +327,32 @@ const DELTA_REPLACEMENTS = [
   },
 ]
 
-/** Delta #2: bundles carrying the FIRST occupancy delta (watch effect only, no
- * inject-hook sync). Just the inject-hook injection; the watch block already exists. */
-const DELTA2_REPLACEMENTS = DELTA_REPLACEMENTS.filter((item) => item.id === 'delta.apply')
+/** Delta #2: bundles carrying the FIRST occupancy delta (watch effect exists,
+ * inject-hook sync missing, computeCall still the 0.0.18 form). */
+const DELTA2_REPLACEMENTS = [
+  ...DELTA_REPLACEMENTS.filter((item) => item.id === 'delta.appframe.computeCall'),
+  ...DELTA_REPLACEMENTS.filter((item) => item.id === 'delta.apply'),
+]
+
+/**
+ * Delta #3: bundles already carrying BOTH the watch block and the inject-hook
+ * sync (0.0.19/0.0.20 delta2 state). Just the computeCall update: the details
+ * pane now takes precedence — an explicitly opened details pane collapses the
+ * explorer column so the crowding solve keeps the stock width budget.
+ */
+const DELTA3_REPLACEMENTS = [
+  {
+    id: 'delta3.appframe.computeCall',
+    anchor: 'const explorerEffective = narrow || !panels.explorerOccupied ? 0 : panels.explorer;',
+    replacement: 'const explorerEffective = narrow || !panels.explorerOccupied || panels.details > 0 ? 0 : panels.explorer;',
+  },
+]
 
 const VARIANTS = [
   { id: 'npm', replacements: REPLACEMENTS },
   { id: 'npm-delta', replacements: DELTA_REPLACEMENTS },
   { id: 'npm-delta2', replacements: DELTA2_REPLACEMENTS },
+  { id: 'npm-delta3', replacements: DELTA3_REPLACEMENTS },
   {
     id: 'desktop-ci',
     replacements: REPLACEMENTS.map((item) =>
@@ -340,9 +363,10 @@ const VARIANTS = [
   },
   { id: 'desktop-ci-delta', replacements: DELTA_REPLACEMENTS },
   { id: 'desktop-ci-delta2', replacements: DELTA2_REPLACEMENTS },
+  { id: 'desktop-ci-delta3', replacements: DELTA3_REPLACEMENTS },
 ]
 
-const PATCHED_MARKERS = ['"explorerCol": "pI_x6G_explorerCol"', 'setExplorer: (d, px) => {', 'renderSlot("explorer"', 'renderSlot("explorer.preview"', 'conversationSeat', 'explorerOccupied', 'entries("explorer").length + ctx.slots']
+const PATCHED_MARKERS = ['"explorerCol": "pI_x6G_explorerCol"', 'setExplorer: (d, px) => {', 'renderSlot("explorer"', 'renderSlot("explorer.preview"', 'conversationSeat', 'explorerOccupied', 'entries("explorer").length + ctx.slots', 'panels.details > 0 ? 0 : panels.explorer']
 
 function applyReplacements(original, replacements) {
   let patched = original

@@ -278,6 +278,10 @@ const LAYOUT_PATCH_MARKERS = [
   // registration emit, so without this the column stayed collapsed forever.
   'explorerOccupied',
   'entries("explorer").length + ctx.slots',
+  // 0.0.21: an explicitly opened details pane collapses the explorer column —
+  // otherwise the crowding solve squeezes details to 0 on <~1480px viewports
+  // ("open details flashes and vanishes").
+  'panels.details > 0 ? 0 : panels.explorer',
 ] as const
 
 /** Resolve the installed dsh-client-ui-layout client bundle (profile node_modules junction). */
