@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.0.22] - 2026-09-07
+
+### Fixed
+
+- **与 maid-atelier 皮肤同装时，点文件树文件预览「弹出内容后立刻消失」**。
+  根因是层叠冲突：皮肤把立绘舞台（palace + 角色）作为 `position:absolute; z-index:0`
+  的层铺满整个中央列（centerCol），聊天内容靠 `position:relative` 浮在其上——而预览
+  面板是**非定位元素**，画在立绘之下。点文件的瞬间 `fe-preview-in` 入场动画（含
+  opacity/transform）临时创建层叠上下文，预览短暂可见（「弹出来内容」）；0.18s 动画
+  一结束上下文消失，预览回落到立绘之下被整片盖住（「迅速关掉」），但它 775px 的占位
+  实实在在挤窄了会话列（「放大缩小保留」）。修复：`.preview` 增加 `position: relative`。
+  headless 复现与修复验证均通过（elementFromPoint + 截图）。
+- **与 maid-atelier 皮肤同装时，预览面板顶部 76px 被皮肤顶帘盖住**（标签栏整条不可见、
+  正文标题被切）。顶帘（`[data-skin-chrome='top-trim']`）是绝对定位、高 76px、
+  `z-index:1` 的装饰带，铺在中央列顶部，且由皮肤在 React 子节点之后 append——与预览
+  面板同层（z 1）时靠 DOM 顺序画在面板之上。会话头部有自己的 z 21 不受影响，预览
+  面板没有。修复：`.preview` 抬到 `z-index: 2`（与相邻拖拽把手 `.handle` 一致），
+  面板的不透明背景把预览半区的帘子自然挡掉，帘子仍完整覆盖会话半区；同时仍低于
+  皮肤功能层（会话头部 21 / cordis 面板 40 / shell overlay 1000）。
+
 ## [0.0.21] - 2026-09-07
 
 ### Fixed

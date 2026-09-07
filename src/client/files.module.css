@@ -342,6 +342,20 @@
   border-right: 1px solid var(--fe-border);
   background: var(--fe-bg);
   animation: fe-preview-in 0.18s ease;
+  /* Paint above the maid-atelier decorative layers parked in the shared
+   * center column: the character stage (absolute, z-index:0) AND the top
+   * curtain / bottom trim bands (absolute, z-index:1, appended AFTER this
+   * pane in DOM order, so at equal z they drape 76px of navy over the tab
+   * bar and the content top). Without a positioning box of its own the pane
+   * is non-positioned content and the stage paints OVER it — but the
+   * fe-preview-in animation temporarily creates a stacking context, so the
+   * pane pops up visible and vanishes the moment the animation ends ("open
+   * a file: it pops, then instantly closes"). z-index:2 clears every
+   * decorative band (matching the sibling .handle) while staying below the
+   * skin's functional chrome tiers (session header 21, cordis panel 40,
+   * shell overlay 1000). */
+  position: relative;
+  z-index: 2;
 }
 
 .previewClosing {
