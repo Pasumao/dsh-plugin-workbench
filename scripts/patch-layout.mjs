@@ -311,6 +311,11 @@ const DELTA_REPLACEMENTS = [
     replacement: '\t\t\tcloseDetails() {\n\t\t\t\tthis.#require().closeDetails();\n\t\t\t}\n\t\t\tsetExplorerOccupied(occupied) {\n\t\t\t\tif (this.#panels !== void 0) this.#panels.setExplorerOccupied(occupied);\n\t\t\t}',
   },
   {
+    id: 'delta.watch',
+    anchor: '\t\t\t\treturn () => {\n\t\t\t\t\tdisposeRegistration();\n\t\t\t\t\tdisposeService();\n\t\t\t\t};\n\t\t\t}, "ui-layout: service + root registration");',
+    replacement: '\t\t\t\treturn () => {\n\t\t\t\t\tdisposeRegistration();\n\t\t\t\t\tdisposeService();\n\t\t\t\t};\n\t\t\t}, "ui-layout: service + root registration");\n\t\t\tctx.effect(() => {\n\t\t\t\tconst syncExplorer = () => {\n\t\t\t\t\tlayout.setExplorerOccupied(ctx.slots.entries("explorer").length > 0 || ctx.slots.entries("explorer.preview").length > 0);\n\t\t\t\t};\n\t\t\t\tsyncExplorer();\n\t\t\t\treturn ctx.on("slots/changed", syncExplorer);\n\t\t\t}, "ui-layout: explorer occupancy sync");',
+  },
+  {
     id: 'delta.apply',
     anchor: '\t\t\t\t\tinject: (actions) => {\n\t\t\t\t\t\tlayout.attachPanels(actions);\n\t\t\t\t\t\treturn {};\n\t\t\t\t\t}',
     replacement: '\t\t\t\t\tinject: (actions) => {\n\t\t\t\t\t\tlayout.attachPanels(actions);\n\t\t\t\t\t\tlayout.setExplorerOccupied(ctx.slots.entries("explorer").length + ctx.slots.entries("explorer.preview").length > 0);\n\t\t\t\t\t\treturn {};\n\t\t\t\t\t}',
@@ -438,7 +443,12 @@ function main() {
   // pre-patch state that already carries our markers gets the timestamped bak.
   const targetLooksPatched = PATCHED_MARKERS.some((marker) => original.includes(marker))
   const hadPristine = existsSync(pristine)
-  if (!hadPristine || !targetLooksPatched) {
+  // The shared pristine backup backs --restore for the DEFAULT profile bundle.
+  // With an explicit --target (testing / another machine's bundle) never touch
+  // it — an unrelated file must not overwrite the restore source.
+  if (targetArg !== undefined) {
+    console.log('[patch-layout] --target given: skipping backup bookkeeping (the shared pristine backup is only managed for the default profile bundle).')
+  } else if (!hadPristine || !targetLooksPatched) {
     copyFileSync(real, pristine)
     if (!hadPristine) console.log(`[patch-layout] pristine backup written: ${pristine}`)
     else console.log('[patch-layout] pristine backup refreshed (dsh upgrade detected — the old orig was a different version).')

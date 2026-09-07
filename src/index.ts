@@ -262,9 +262,14 @@ function pathOf(payload: unknown): string | undefined {
  * fine — this is the exact failure this auto-heal guards against.
  */
 const LAYOUT_PATCH_MARKERS = [
-  '"explorerCol": "',
+  // Keep in exact sync with PATCHED_MARKERS in scripts/patch-layout.mjs — a
+  // weaker subset here means a damaged/partially-reverted bundle could pass
+  // the host check yet fail the script's verification, and auto-heal never
+  // fires for it.
+  '"explorerCol": "pI_x6G_explorerCol"',
   'setExplorer: (d, px) => {',
   'renderSlot("explorer"',
+  'renderSlot("explorer.preview"',
   'conversationSeat',
   // 0.0.18+: occupancy gating — the explorer column must auto-hide when no
   // plugin contributes to the explorer / explorer.preview slots (issue #2).

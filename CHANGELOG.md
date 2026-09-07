@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.0.20] - 2026-09-07
+
+### Fixed
+
+- 全链路代码审查（子代理逐变体模拟验证）后的三处收尾：
+  1. **`npm-delta` 变体缺 watch 块**（中危）：0.0.16/17 旧补丁（无 occupancy）用户经
+     delta 打完后没有 `slots/changed` 同步——运行时卸载插件列不即时收起（重启后才由
+     inject hook 兜底）。delta 表补上 watch 块注入，已用构造的旧补丁态产物实测命中。
+  2. **host 自愈 marker 是脚本的弱子集**（形式问题）：`src/index.ts` 的清单缺
+     `renderSlot("explorer.preview"` 且 explorerCol 用短前缀——受损/半回退 bundle 可能
+     过 host 检查却过不了脚本校验，自愈永不触发。host 清单已与脚本 `PATCHED_MARKERS`
+     7 项逐字同步。
+  3. **`--target` 污染共享 pristine 备份**（运维隐患）：脚本对任意 `--target` 文件也会
+     刷新仓库内的 `client.js.orig`。现在备份簿记仅在默认 profile 路径下执行，
+     `--target` 时明确跳过。
+
 ## [0.0.19] - 2026-09-07
 
 ### Fixed
