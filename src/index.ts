@@ -27,9 +27,10 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, watch as watchFs } from 'node:fs'
+import { existsSync, watch as watchFs } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { readFile as readFileAsync } from 'node:fs/promises'
 import { mkdir, rename as renameFs, rm, cp, writeFile as writeFileNode } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
@@ -284,6 +285,19 @@ const LAYOUT_PATCH_MARKERS = [
   'panels.details > 0 ? 0 : panels.explorer',
 ] as const
 
+/** Completion markers of the 0.1.5 (rightbar frame) patch — sync with PATCHED_MARKERS_015 in scripts/patch-layout.mjs. */
+const LAYOUT_PATCH_MARKERS_015 = [
+  '"explorerCol": "pI_x6G_explorerCol"',
+  'setExplorer: (d, px) => {',
+  'renderSlot("explorer"',
+  'renderSlot("explorer.preview"',
+  'conversationSeat',
+  'explorerOccupied',
+  'entries("explorer").length > 0 || ctx.slots',
+  'layoutInfo.explorerOccupied || layoutInfo.rightbarShown ? 0 : layoutInfo.explorer',
+  '"data-explorer-collapsed"',
+] as const
+
 /** Resolve the installed dsh-client-ui-layout client bundle (profile node_modules junction). */
 function layoutClientPath(): string {
   const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
@@ -296,12 +310,14 @@ function layoutClientPath(): string {
  * the check never blocks a boot; an unreadable file likewise bails out to the
  * caller rather than throwing.
  */
-function layoutIsPatched(): boolean {
+async function layoutIsPatched(): Promise<boolean> {
   try {
     const target = layoutClientPath()
     if (!existsSync(target)) return true
-    const text = readFileSync(target, 'utf8')
-    return LAYOUT_PATCH_MARKERS.every((marker) => text.includes(marker))
+    const text = await readFileAsync(target, 'utf8')
+    // Either patch generation counts as patched (dsh ≤ 0.1.2 or the 0.1.5
+    // rightbar-frame rewrite).
+    return LAYOUT_PATCH_MARKERS.every((marker) => text.includes(marker)) || LAYOUT_PATCH_MARKERS_015.every((marker) => text.includes(marker))
   } catch {
     return true
   }
@@ -321,11 +337,11 @@ let layoutPatchScheduled = false
  * it only logs a warning and the plugin still boots. Idempotent and
  * non-blocking (spawned fire-and-forget), so it never delays a boot.
  */
-function ensureLayoutPatch(): void {
+async function ensureLayoutPatch(): Promise<void> {
   if (layoutPatchScheduled) return
   layoutPatchScheduled = true
   try {
-    if (layoutIsPatched()) return
+    if (await layoutIsPatched()) return
     const script = join(dirname(dirname(fileURLToPath(import.meta.url))), 'scripts', 'patch-layout.mjs')
     const child = spawn(process.execPath, [script], { stdio: 'inherit', windowsHide: true })
     child.on('error', (err) => {
@@ -386,7 +402,8 @@ function installMentionPrompt(ctx: Context): void {
  */
 export function apply(ctx: Context): void {
   // Re-apply the ui-layout explorer-column patch when a dsh upgrade reverted it.
-  ensureLayoutPatch()
+  // Async (readFile) so the bundle-size check never blocks a boot.
+  void ensureLayoutPatch()
   // Teach every agent the workbench `@.\` mention grammar (per-agent fiber).
   installMentionPrompt(ctx)
   // Per-apply watch state: created here (not module-level) so disable/reload
@@ -411,10 +428,24 @@ export function apply(ctx: Context): void {
     if (endpoint === 'reveal') return revealInExplorer(ctx, payload, signal)
     return fail(`unknown endpoint: ${endpoint}`)
   }
-  // Effect-wrapped so HMR/disable cycles dispose the channel (the connection
-  // service registers the HTTP carrier for the channel the same way); a plain
-  // call here would leak the route on reload and collide on re-apply.
-  ctx.effect(() => ctx.connection.rpc.handle(CHANNEL, handler, { authority: 'loopback' }), 'dsh-plugin-workbench: files rpc channel')
+  // Effect-wrapped so HMR/disable cycles dispose the route (a plain call here
+  // would leak it on reload and collide on re-apply).
+  //
+  // dsh 0.1.5: `connection.rpc.handle` mounts the channel via an effect on the
+  // CONNECTION service's own context, and that context can no longer see the
+  // webServer service under cordis 4.0.2 ("cannot get property webServer
+  // without inject" — first-party code only ever reaches webServer through
+  // ctx.inject forks, cf. dsh-api-gateway / dsh-client-connection's own
+  // apply). So the channel's HTTP carrier is mounted here, on this plugin's
+  // own webServer-granted context, speaking the same wire protocol the web
+  // client's `connection.rpc.call` expects (see serveFilesRpc below).
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix',
+    path: CHANNEL,
+    handler: (req, res) => {
+      void serveFilesRpc(ctx, handler, req, res)
+    },
+  }), 'dsh-plugin-workbench: files rpc channel')
 
   // Raw image bytes for the preview pane. The client builds the URL as
   // `${RAW_PREFIX}/${encodeURIComponent(path)}`; the suffix is decoded back to
@@ -424,6 +455,12 @@ export function apply(ctx: Context): void {
     kind: 'prefix',
     path: RAW_PREFIX,
     handler: (req, res) => {
+      const rejection = ctx.connection.requestRejection(req)
+      if (rejection !== undefined) {
+        res.writeHead(rejection)
+        res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
+        return
+      }
       void serveRaw(ctx, req, res)
     },
   }), 'dsh-plugin-workbench: raw image route')
@@ -434,7 +471,15 @@ export function apply(ctx: Context): void {
     const disposeRoute = ctx.webServer.register({
       kind: 'exact',
       path: EVENTS_PREFIX,
-      handler: (req, res) => sseHandler(watchState, req, res),
+      handler: (req, res) => {
+        const rejection = ctx.connection.requestRejection(req)
+        if (rejection !== undefined) {
+          res.writeHead(rejection)
+          res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
+          return
+        }
+        sseHandler(watchState, req, res)
+      },
     })
     const heartbeat = setInterval(() => {
       for (const res of watchState.clients) {
@@ -451,6 +496,113 @@ export function apply(ctx: Context): void {
       disposeWatch(watchState)
     }
   }, 'dsh-plugin-workbench: disk change stream (SSE)')
+}
+
+// ---------------------------------------------------------------------------
+// RPC channel HTTP carrier
+//
+// Wire format of the web client's `connection.rpc.call` (dsh-client-connection
+// client half): POST `${CHANNEL}/${endpoint}` with `content-type:
+// application/json` and a `{ type: 'client-request', rpcId, method, payload }`
+// body; it only accepts HTTP 200 and parses a
+// `{ type: 'server-response', rpcId, result }` envelope, where result is the
+// handler's `{ ok: true, value } | { ok: false, error }` verbatim. Any non-200
+// surfaces to the caller as a bare "transport failure" throw. Statuses mirror
+// what rpc.handle used to answer: 404 (method/path), 415 (content type),
+// 400 (bad JSON), 413 (oversize), 500 (handler crash).
+// ---------------------------------------------------------------------------
+
+/** RPC endpoint segment rules (same charset dsh-client-connection enforces). */
+const ENDPOINT_SEGMENT = /^[A-Za-z0-9_$.-]+$/
+
+/** Buffered-body cap; parity with the server's default request cap (300 MB). */
+const MAX_RPC_BODY_BYTES = 300 * 1024 * 1024
+
+/** Extract the endpoint from `${CHANNEL}/${endpoint}`, or undefined if malformed. */
+function rpcEndpointOf(pathname: string): string | undefined {
+  if (!pathname.startsWith(`${CHANNEL}/`)) return undefined
+  const endpoint = pathname.slice(CHANNEL.length + 1)
+  if (endpoint.split('/').some((segment) => segment === '' || segment === '.' || segment === '..' || !ENDPOINT_SEGMENT.test(segment))) return undefined
+  return endpoint
+}
+
+function sendText(res: ServerResponse, status: number, body: string): void {
+  res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' })
+  res.end(body)
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'content-type': 'application/json' })
+  res.end(JSON.stringify(body))
+}
+
+/** Serve one RPC request against `handler` (see the section comment for the wire format). */
+async function serveFilesRpc(
+  ctx: Context,
+  handler: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<FilesRpcResult>,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  // Same Host/Origin + browser-auth fence the connection service applies to
+  // channels it mounts itself.
+  const rejection = ctx.connection.requestRejection(req)
+  if (rejection !== undefined) {
+    res.writeHead(rejection)
+    res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
+    return
+  }
+  const endpoint = rpcEndpointOf(new URL(req.url ?? '/', 'http://dsh.internal').pathname)
+  if (req.method !== 'POST' || endpoint === undefined) return sendText(res, 404, 'not found')
+  const contentType = req.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase()
+  if (contentType !== 'application/json') return sendText(res, 415, 'content type must be application/json')
+  const abort = new AbortController()
+  res.on('close', () => {
+    if (!res.writableEnded) abort.abort()
+  })
+  const declaredLength = req.headers['content-length']
+  if (declaredLength !== undefined && Number(declaredLength) > MAX_RPC_BODY_BYTES) {
+    res.writeHead(413, { connection: 'close' })
+    res.end()
+    req.destroy()
+    return
+  }
+  const chunks: Buffer[] = []
+  let received = 0
+  for await (const chunk of req) {
+    received += (chunk as Buffer).byteLength
+    if (received > MAX_RPC_BODY_BYTES) {
+      res.writeHead(413, { connection: 'close' })
+      res.end()
+      req.destroy()
+      return
+    }
+    chunks.push(chunk as Buffer)
+  }
+  let message: { rpcId?: unknown; method?: unknown; payload?: unknown }
+  try {
+    message = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    return sendText(res, 400, 'body is not JSON')
+  }
+  const rpcId = typeof message.rpcId === 'string' && message.rpcId !== '' ? message.rpcId : '-'
+  if (typeof message.rpcId !== 'string' || message.rpcId === '' || message.method !== endpoint) {
+    sendJson(res, 200, {
+      type: 'server-response',
+      rpcId,
+      result: {
+        ok: false,
+        error: { code: 'gateway/bad-request', message: 'invalid client-request message', details: { issues: [] } },
+      },
+    })
+    return
+  }
+  let result: FilesRpcResult
+  try {
+    result = await handler(endpoint, message.payload, abort.signal)
+  } catch (error) {
+    return sendText(res, 500, `handler failure: ${String(error)}`)
+  }
+  sendJson(res, 200, { type: 'server-response', rpcId, result })
 }
 
 // ---------------------------------------------------------------------------
@@ -550,6 +702,30 @@ function watchDir(state: WatchState, dir: string, osPath: string): boolean {
     } catch {
       return false
     }
+    // fs.watch surfaces errors (e.g. the watched directory being deleted or a
+    // handle overflow) asynchronously on the watcher — an unhandled 'error'
+    // event would crash the host process, so always attach a handler.
+    watcher.on('error', (err: unknown) => {
+      console.warn(`[dsh-plugin-workbench] fs.watch error for "${dir}":`, err instanceof Error ? err.message : err)
+      try {
+        watcher.close()
+      } catch {
+        // Already closed.
+      }
+      if (state.dirs.get(dir)?.watcher === watcher) {
+        state.dirs.delete(dir)
+        for (const os of [...state.files.keys()]) {
+          if (dirname(os) === dir) {
+            const entry = state.files.get(os)
+            if (entry?.timer !== undefined) clearTimeout(entry.timer)
+            state.files.delete(os)
+            state.selfWrites.delete(os)
+          }
+        }
+      }
+      // The next client `watch` sync round retries the directory and the
+      // change stream resumes once it is watchable again.
+    })
     bucket = { watcher, basenames: new Map() }
     state.dirs.set(dir, bucket)
   }

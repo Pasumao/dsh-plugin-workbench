@@ -45,7 +45,9 @@ What you'll see after installing:
   Markdown renders a preview by default (one-click switch between source and rendered view); prose formats like
   .txt and very large code files automatically fall back to plain-text editing — fast to load, no UI jank
 - **Disk change sync**: when an open file is modified externally (e.g. saved by an agent or another editor),
-  clean tabs reload automatically, while tabs with unsaved edits show a "⟳" badge (click to reload)
+  clean tabs reload automatically, while tabs with unsaved edits show a "⟳" badge (click to reload); if a watched
+  directory is deleted or access-restricted, the watcher degrades gracefully (state cleaned up, retry allowed) and
+  never crashes the host process
 - **Line-number gutter**: logical line numbers along the editor's left edge, locked in alignment with text scrolling
   (works in both plain-text and highlighted modes)
 - **Image preview**: png/jpg/gif/webp/avif/svg and more render inline directly (same-origin byte route, 20MB limit)
@@ -158,7 +160,8 @@ node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs --restore
 
 - The `/dsh-plugin-files` RPC channel is loopback-only; write operations are executed explicitly under
   `danger-full-access`; the context menu's create/rename/delete go through the same channel too (loopback trust,
-  same as saving in the editor)
+  same as saving in the editor); all HTTP routes mounted by this plugin (RPC / raw images / SSE) uniformly pass the
+  connection-layer auth fence (`connection.requestRejection`, Host/Origin + browser auth checks)
 - Image preview goes through the same-origin route `/dsh-plugin-files/raw/<path>`: it only responds to image
   extensions, resolves the path via `ctx.fs.resolve → stat` first (sandbox-consistent path resolution) before reading
   bytes, with a 20MB limit
@@ -196,6 +199,7 @@ alongside it:
 | [dsh-plugin-table-zoom](https://www.npmjs.com/package/dsh-plugin-table-zoom) | [GitHub repo](https://github.com/Pasumao/dsh-plugin-table-zoom) | Floating window for long chat tables + one-click Markdown copy |
 | [dsh-plugin-windows-guard](https://www.npmjs.com/package/dsh-plugin-windows-guard) | [GitHub repo](https://github.com/Pasumao/dsh-plugin-windows-guard) | Windows environment safeguards: guideline skills + mojibake detection / dangerous-write interception / encoding diagnosis & repair |
 | [dsh-plugin-context-trim](https://www.npmjs.com/package/dsh-plugin-context-trim) | [GitHub repo](https://github.com/Pasumao/dsh-plugin-context-trim) | Per-session injection gate: trim skills / tools / prompt sections per session |
+| [dsh-plugin-workbench](https://www.npmjs.com/package/dsh-plugin-workbench) | [GitHub repo](https://github.com/Pasumao/dsh-plugin-workbench) | This plugin: VS Code-style workspace file tree + editable preview, turning the web page into a lightweight code editor |
 
 > For the remaining plugins in the series, see [Pasumao · dsh plugins](https://github.com/Pasumao); if you find them useful, a ⭐ on GitHub is always welcome.
 

@@ -41,9 +41,9 @@ declare module '@deepseek-ai/cordis' {
       rpc: {
         /** Browser-side unary call over a registered logical channel. */
         call(channel: string, endpoint: string, payload: unknown, signal?: AbortSignal): Promise<RpcShape>
-        /** Host-side channel registration; returns an async disposer. */
-        handle(channel: string, handler: RpcHandler, options: { authority: 'loopback' | 'trusted-host' }): () => Promise<void>
       }
+      /** Host/Origin fence + browser auth verdict for a raw request (0 = let through). */
+      requestRejection(req: import('node:http').IncomingMessage): 401 | 403 | undefined
     }
     slots: {
       register(options: {

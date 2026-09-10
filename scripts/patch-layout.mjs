@@ -283,6 +283,272 @@ const REPLACEMENTS = [
   },
 ]
 
+// ---------------------------------------------------------------------------
+// dsh 0.1.5-rc.1 variant: the frame was re-architected — the details column
+// became the generic "rightbar" panel system (RightbarColumn, track/fullscreen
+// presentation, keyed "main" slot) and the whole bundle gained a
+// window.__ModuleLoader__ wrapper (+1 tab of indent). The explorer column is
+// re-added between sidebar and center; the rightbar solve budgets it into
+// `available`, and an explicitly shown rightbar panel collapses the explorer
+// (parity with the 0.0.21 details-precedence rule).
+// ---------------------------------------------------------------------------
+const REPLACEMENTS_015 = [
+  {
+    id: 'css.explorerCol.rule',
+    anchor: '.pI_x6G_sidebarCol{background:var(--dsw-specific-sidebar-fill);border-right:.5px solid var(--dsw-alias-border-l3);min-width:0;overflow:hidden}',
+    replacement: '.pI_x6G_sidebarCol{background:var(--dsw-specific-sidebar-fill);border-right:.5px solid var(--dsw-alias-border-l3);min-width:0;overflow:hidden}.pI_x6G_explorerCol{background:var(--dsw-specific-sidebar-fill);border-right:.5px solid var(--dsw-alias-border-l3);min-width:0;overflow:hidden}',
+  },
+  {
+    id: 'css.conversationSeat.rule',
+    // Row direction is LOAD-BEARING: the preview slot renders as CenterColumn's
+    // first child and must sit BESIDE the conversation seat (0.1.2 patch
+    // parity). Leaving `column` stacks the preview full-width ABOVE the chat.
+    anchor: '.pI_x6G_centerCol{flex-direction:column;min-width:0;display:flex;overflow:hidden}',
+    replacement: '.pI_x6G_centerCol{flex-direction:row;min-width:0;display:flex;overflow:hidden}.pI_x6G_conversationSeat{flex:1 1 0;min-width:0;overflow:hidden}',
+  },
+  {
+    id: 'css.classMap',
+    anchor: '"centerCol": "pI_x6G_centerCol",',
+    replacement: '"centerCol": "pI_x6G_centerCol",\n\t\t\t"explorerCol": "pI_x6G_explorerCol",\n\t\t\t"conversationSeat": "pI_x6G_conversationSeat",',
+  },
+  {
+    id: 'computeColumns',
+    anchor: L(
+      'function computeColumns(viewport, sidebar, rightbar) {',
+      '\t\t\tconst s = sidebar === 0 ? 56 : clampWidth(sidebar, 264, 420);',
+      '\t\t\tconst available = viewport - s - 400;',
+      '\t\t\tconst r = rightbar === 0 || available < 300 ? 0 : Math.min(available, clampWidth(rightbar, 300, viewport * RIGHTBAR_MAX_RATIO));',
+      '\t\t\treturn {',
+      '\t\t\t\tsidebar: s,',
+      '\t\t\t\tcenter: Math.max(0, viewport - s - r),',
+      '\t\t\t\trightbar: r',
+      '\t\t\t};',
+      '\t\t}',
+    ),
+    replacement: L(
+      'function computeColumns(viewport, sidebar, explorer, rightbar) {',
+      '\t\t\tconst s = sidebar === 0 ? 56 : clampWidth(sidebar, 264, 420);',
+      '\t\t\tconst e0 = explorer === 0 ? 0 : clampWidth(explorer, 200, 420);',
+      '\t\t\tconst available = viewport - s - e0 - 400;',
+      '\t\t\tconst r = rightbar === 0 || available < 300 ? 0 : Math.min(available, clampWidth(rightbar, 300, viewport * RIGHTBAR_MAX_RATIO));',
+      '\t\t\treturn {',
+      '\t\t\t\tsidebar: s,',
+      '\t\t\t\texplorer: e0,',
+      '\t\t\t\tcenter: Math.max(0, viewport - s - e0 - r),',
+      '\t\t\t\trightbar: r',
+      '\t\t\t};',
+      '\t\t}',
+    ),
+  },
+  {
+    id: 'store.init.explorer',
+    anchor: '\t\t\t\t\t\tsidebar: 280,',
+    replacement: '\t\t\t\t\t\tsidebar: 280,\n\t\t\t\t\t\texplorer: 260,\n\t\t\t\t\t\texplorerOccupied: false,',
+  },
+  {
+    id: 'store.action.setExplorer',
+    anchor: L(
+      '\t\t\t\t\tsetSidebar: (d, px) => {',
+      '\t\t\t\t\t\td.layoutInfo.rightbarInstant = false;',
+      '\t\t\t\t\t\td.layoutInfo.sidebar = clampWidth(px, 264, 420);',
+      '\t\t\t\t\t},',
+    ),
+    replacement: L(
+      '\t\t\t\t\tsetSidebar: (d, px) => {',
+      '\t\t\t\t\t\td.layoutInfo.rightbarInstant = false;',
+      '\t\t\t\t\t\td.layoutInfo.sidebar = clampWidth(px, 264, 420);',
+      '\t\t\t\t\t},',
+      '\t\t\t\t\tsetExplorer: (d, px) => {',
+      '\t\t\t\t\t\td.layoutInfo.explorer = clampWidth(px, 200, 420);',
+      '\t\t\t\t\t},',
+      '\t\t\t\t\tsetExplorerOccupied: (d, occupied) => {',
+      '\t\t\t\t\t\td.layoutInfo.explorerOccupied = occupied;',
+      '\t\t\t\t\t},',
+    ),
+  },
+  {
+    id: 'controller.setExplorerOccupied',
+    anchor: L(
+      '\t\t\tcloseRightbar() {',
+      '\t\t\t\tthis.panels.closeRightbar();',
+      '\t\t\t}',
+    ),
+    replacement: L(
+      '\t\t\tcloseRightbar() {',
+      '\t\t\t\tthis.panels.closeRightbar();',
+      '\t\t\t}',
+      '\t\t\tsetExplorerOccupied(occupied) {',
+      '\t\t\t\tif (this.panels !== void 0) this.panels.setExplorerOccupied(occupied);',
+      '\t\t\t}',
+    ),
+  },
+  {
+    id: 'apply.explorerOccupancyWatch',
+    // Must live INSIDE the service+root registration effect: 0.1.5 declares
+    // `const layout` in that callback's scope (0.1.2 had it at apply level —
+    // an apply-level effect here throws "layout is not defined" on load).
+    anchor: L(
+      '\t\t\t\tretainMainPanels();',
+      '\t\t\t\treturn () => {',
+      '\t\t\t\t\tlayout.dispose();',
+    ),
+    replacement: L(
+      '\t\t\t\tretainMainPanels();',
+      '\t\t\t\tctx.effect(() => {',
+      '\t\t\t\t\tconst syncExplorer = () => {',
+      '\t\t\t\t\t\tlayout.setExplorerOccupied(ctx.slots.entries("explorer").length > 0 || ctx.slots.entries("explorer.preview").length > 0);',
+      '\t\t\t\t\t};',
+      '\t\t\t\t\tsyncExplorer();',
+      '\t\t\t\t\treturn ctx.on("slots/changed", syncExplorer);',
+      '\t\t\t\t}, "ui-layout: explorer occupancy sync");',
+      '\t\t\t\treturn () => {',
+      '\t\t\t\t\tlayout.dispose();',
+    ),
+  },
+  {
+    id: 'apply.children.explorer',
+    anchor: L(
+      '\t\t\t\t\t\t"sidebar": {',
+      '\t\t\t\t\t\t\tkind: "single",',
+      '\t\t\t\t\t\t\tscope: "root"',
+      '\t\t\t\t\t\t},',
+    ),
+    replacement: L(
+      '\t\t\t\t\t\t"sidebar": {',
+      '\t\t\t\t\t\t\tkind: "single",',
+      '\t\t\t\t\t\t\tscope: "root"',
+      '\t\t\t\t\t\t},',
+      '\t\t\t\t\t\t"explorer": {',
+      '\t\t\t\t\t\t\tkind: "single",',
+      '\t\t\t\t\t\t\tscope: "root"',
+      '\t\t\t\t\t\t},',
+    ),
+  },
+  {
+    id: 'apply.children.explorerPreview',
+    anchor: L(
+      '\t\t\t\t\t\t"explorer": {',
+      '\t\t\t\t\t\t\tkind: "single",',
+      '\t\t\t\t\t\t\tscope: "root"',
+      '\t\t\t\t\t\t},',
+    ),
+    replacement: L(
+      '\t\t\t\t\t\t"explorer": {',
+      '\t\t\t\t\t\t\tkind: "single",',
+      '\t\t\t\t\t\t\tscope: "root"',
+      '\t\t\t\t\t\t},',
+      '\t\t\t\t\t\t"explorer.preview": {',
+      '\t\t\t\t\t\t\tkind: "single",',
+      '\t\t\t\t\t\t\tscope: "root"',
+      '\t\t\t\t\t\t},',
+    ),
+  },
+  {
+    id: 'appframe.explorerEffective.normal',
+    // A shown rightbar panel collapses the explorer column so the stock width
+    // budget is restored (0.0.21 parity: explicit panel open beats explorer).
+    anchor: '\t\t\tconst normal = computeColumns(viewport, !layoutInfo.rightbarShown && narrow ? 0 : sidebarPreference, rightbarPreference);',
+    replacement: L(
+      '\t\t\tconst explorerEffective = narrow || !layoutInfo.explorerOccupied || layoutInfo.rightbarShown ? 0 : layoutInfo.explorer;',
+      '\t\t\tconst normal = computeColumns(viewport, !layoutInfo.rightbarShown && narrow ? 0 : sidebarPreference, explorerEffective, rightbarPreference);',
+    ),
+  },
+  {
+    id: 'appframe.explorerEffective.cols',
+    anchor: '\t\t\tconst cols = computeColumns(viewport, sidebarPreference, layoutInfo.rightbarTrack ? rightbarPreference : 0);',
+    replacement: '\t\t\tconst cols = computeColumns(viewport, sidebarPreference, explorerEffective, layoutInfo.rightbarTrack ? rightbarPreference : 0);',
+  },
+  {
+    id: 'appframe.explorerBase',
+    anchor: '\t\t\tconst rightbarBase = (0, react.useRef)(0);',
+    replacement: '\t\t\tconst rightbarBase = (0, react.useRef)(0);\n\t\t\tconst explorerBase = (0, react.useRef)(0);',
+  },
+  {
+    id: 'appframe.explorerDragCallbacks',
+    anchor: L(
+      '\t\t\tconst onRightbarDrag = (0, react.useCallback)((dx) => {',
+      '\t\t\t\tactions.setRightbar(rightbarBase.current - dx);',
+      '\t\t\t}, [actions]);',
+    ),
+    replacement: L(
+      '\t\t\tconst onRightbarDrag = (0, react.useCallback)((dx) => {',
+      '\t\t\t\tactions.setRightbar(rightbarBase.current - dx);',
+      '\t\t\t}, [actions]);',
+      '\t\t\tconst onExplorerStart = (0, react.useCallback)(() => {',
+      '\t\t\t\texplorerBase.current = colsRef.current.explorer;',
+      '\t\t\t\tsetDragging(true);',
+      '\t\t\t}, []);',
+      '\t\t\tconst onExplorerDrag = (0, react.useCallback)((dx) => {',
+      '\t\t\t\tactions.setExplorer(explorerBase.current + dx);',
+      '\t\t\t}, [actions]);',
+    ),
+  },
+  {
+    id: 'appframe.gridTemplate',
+    anchor: 'gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr) ${cols.rightbar}px`',
+    replacement: 'gridTemplateColumns: `${cols.sidebar}px ${cols.explorer}px minmax(0, 1fr) ${cols.rightbar}px`',
+  },
+  {
+    id: 'appframe.dataExplorerCollapsed',
+    anchor: '\t\t\t\t"data-rightbar-collapsed": cols.rightbar === 0 || void 0,',
+    replacement: '\t\t\t\t"data-rightbar-collapsed": cols.rightbar === 0 || void 0,\n\t\t\t\t"data-explorer-collapsed": cols.explorer === 0 || void 0,',
+  },
+  {
+    id: 'appframe.explorerColumn',
+    anchor: L(
+      '\t\t\t\t\t(0, react_jsx_runtime.jsx)("div", {',
+      '\t\t\t\t\t\tclassName: AppFrame_module_css_default.sidebarCol,',
+      '\t\t\t\t\t\tchildren: sidebar',
+      '\t\t\t\t\t}),',
+    ),
+    replacement: L(
+      '\t\t\t\t\t(0, react_jsx_runtime.jsx)("div", {',
+      '\t\t\t\t\t\tclassName: AppFrame_module_css_default.sidebarCol,',
+      '\t\t\t\t\t\tchildren: sidebar',
+      '\t\t\t\t\t}),',
+      '\t\t\t\t\t(0, react_jsx_runtime.jsx)("div", {',
+      '\t\t\t\t\t\tclassName: AppFrame_module_css_default.explorerCol,',
+      '\t\t\t\t\t\tchildren: renderSlot("explorer", {',
+      '\t\t\t\t\t\t\twidth: cols.explorer',
+      '\t\t\t\t\t\t})',
+      '\t\t\t\t\t}),',
+    ),
+  },
+  {
+    id: 'appframe.explorerHandle',
+    anchor: L(
+      '\t\t\t\t\t!sidebarCollapsed && (0, react_jsx_runtime.jsx)(DragHandle, {',
+      '\t\t\t\t\t\tside: "sidebar",',
+      '\t\t\t\t\t\tleft: cols.sidebar,',
+      '\t\t\t\t\t\tonStart: onSidebarStart,',
+      '\t\t\t\t\t\tonDrag: onSidebarDrag,',
+      '\t\t\t\t\t\tonEnd: onDragEnd',
+      '\t\t\t\t\t}),',
+    ),
+    replacement: L(
+      '\t\t\t\t\t!sidebarCollapsed && (0, react_jsx_runtime.jsx)(DragHandle, {',
+      '\t\t\t\t\t\tside: "sidebar",',
+      '\t\t\t\t\t\tleft: cols.sidebar,',
+      '\t\t\t\t\t\tonStart: onSidebarStart,',
+      '\t\t\t\t\t\tonDrag: onSidebarDrag,',
+      '\t\t\t\t\t\tonEnd: onDragEnd',
+      '\t\t\t\t\t}),',
+      '\t\t\t\t\tcols.explorer > 0 && (0, react_jsx_runtime.jsx)(DragHandle, {',
+      '\t\t\t\t\t\tside: "explorer",',
+      '\t\t\t\t\t\tleft: cols.sidebar + cols.explorer,',
+      '\t\t\t\t\t\tonStart: onExplorerStart,',
+      '\t\t\t\t\t\tonDrag: onExplorerDrag,',
+      '\t\t\t\t\t\tonEnd: onDragEnd',
+      '\t\t\t\t\t}),',
+    ),
+  },
+  {
+    id: 'appframe.centerSplit',
+    anchor: '(0, react_jsx_runtime.jsx)(CenterColumn, { children: main })',
+    replacement: '(0, react_jsx_runtime.jsx)(CenterColumn, { children: [renderSlot("explorer.preview", {}), (0, react_jsx_runtime.jsx)("div", { className: AppFrame_module_css_default.conversationSeat, children: main })] })',
+  },
+]
+
 // desktop-ci variant: same table, with `computeColumns` swapped for the anchor
 // pair extracted mechanically from a real DSH Desktop packaged bundle.
 const DESKTOP_CI = JSON.parse(readFileSync(join(SCRIPT_DIR, 'layout-anchors.desktop-ci.json'), 'utf8'))
@@ -348,11 +614,21 @@ const DELTA3_REPLACEMENTS = [
   },
 ]
 
+/** Completion markers of the dsh ≤ 0.1.2 explorer patch. */
+const PATCHED_MARKERS = ['"explorerCol": "pI_x6G_explorerCol"', 'setExplorer: (d, px) => {', 'renderSlot("explorer"', 'renderSlot("explorer.preview"', 'conversationSeat', 'explorerOccupied', 'entries("explorer").length + ctx.slots', 'panels.details > 0 ? 0 : panels.explorer']
+
+/** Completion markers of the dsh 0.1.5 (rightbar frame) explorer patch. */
+const PATCHED_MARKERS_015 = ['"explorerCol": "pI_x6G_explorerCol"', 'setExplorer: (d, px) => {', 'renderSlot("explorer"', 'renderSlot("explorer.preview"', 'conversationSeat', 'explorerOccupied', 'entries("explorer").length > 0 || ctx.slots', 'layoutInfo.explorerOccupied || layoutInfo.rightbarShown ? 0 : layoutInfo.explorer', '"data-explorer-collapsed"']
+
+const isFullyPatched = (text) => PATCHED_MARKERS.every((marker) => text.includes(marker)) || PATCHED_MARKERS_015.every((marker) => text.includes(marker))
+const looksPatched = (text) => [...PATCHED_MARKERS, ...PATCHED_MARKERS_015].some((marker) => text.includes(marker))
+
 const VARIANTS = [
-  { id: 'npm', replacements: REPLACEMENTS },
-  { id: 'npm-delta', replacements: DELTA_REPLACEMENTS },
-  { id: 'npm-delta2', replacements: DELTA2_REPLACEMENTS },
-  { id: 'npm-delta3', replacements: DELTA3_REPLACEMENTS },
+  { id: 'npm-015', replacements: REPLACEMENTS_015, markers: PATCHED_MARKERS_015 },
+  { id: 'npm', replacements: REPLACEMENTS, markers: PATCHED_MARKERS },
+  { id: 'npm-delta', replacements: DELTA_REPLACEMENTS, markers: PATCHED_MARKERS },
+  { id: 'npm-delta2', replacements: DELTA2_REPLACEMENTS, markers: PATCHED_MARKERS },
+  { id: 'npm-delta3', replacements: DELTA3_REPLACEMENTS, markers: PATCHED_MARKERS },
   {
     id: 'desktop-ci',
     replacements: REPLACEMENTS.map((item) =>
@@ -360,13 +636,12 @@ const VARIANTS = [
         ? { id: 'computeColumns', anchor: DESKTOP_CI.anchor, replacement: DESKTOP_CI.replacement }
         : item
     ),
+    markers: PATCHED_MARKERS,
   },
-  { id: 'desktop-ci-delta', replacements: DELTA_REPLACEMENTS },
-  { id: 'desktop-ci-delta2', replacements: DELTA2_REPLACEMENTS },
-  { id: 'desktop-ci-delta3', replacements: DELTA3_REPLACEMENTS },
+  { id: 'desktop-ci-delta', replacements: DELTA_REPLACEMENTS, markers: PATCHED_MARKERS },
+  { id: 'desktop-ci-delta2', replacements: DELTA2_REPLACEMENTS, markers: PATCHED_MARKERS },
+  { id: 'desktop-ci-delta3', replacements: DELTA3_REPLACEMENTS, markers: PATCHED_MARKERS },
 ]
-
-const PATCHED_MARKERS = ['"explorerCol": "pI_x6G_explorerCol"', 'setExplorer: (d, px) => {', 'renderSlot("explorer"', 'renderSlot("explorer.preview"', 'conversationSeat', 'explorerOccupied', 'entries("explorer").length + ctx.slots', 'panels.details > 0 ? 0 : panels.explorer']
 
 function applyReplacements(original, replacements) {
   let patched = original
@@ -410,15 +685,15 @@ function main() {
     }
     // Staleness guard 1: the target may be a NEWER pristine from a dsh upgrade
     // (nothing to restore). Refuse unless --force.
-    const looksPatched = PATCHED_MARKERS.some((marker) => original.includes(marker))
+    const wasPatched = looksPatched(original)
     // Staleness guard 2: the backup must itself be a pristine this script can
     // still patch (an old-dsh backup is useless on a newer dsh — restoring it
     // would be a silent downgrade). Refuse unless --force.
     const backupText = readFileSync(pristine, 'utf8')
     const backupPatchable = VARIANTS.filter((v) => v.id !== 'npm-delta' && v.id !== 'desktop-ci-delta')
       .some((variant) => applyReplacements(backupText, variant.replacements).failures.length === 0)
-    if ((!looksPatched || !backupPatchable) && !force) {
-      if (!looksPatched) {
+    if ((!wasPatched || !backupPatchable) && !force) {
+      if (!wasPatched) {
         console.error('[patch-layout] target does not look patched — it may be a newer pristine bundle from a dsh upgrade.')
       }
       if (!backupPatchable) {
@@ -435,7 +710,7 @@ function main() {
     return
   }
 
-  const alreadyPatched = PATCHED_MARKERS.every((marker) => original.includes(marker))
+  const alreadyPatched = isFullyPatched(original)
   if (alreadyPatched && !force) {
     console.log(`[patch-layout] already patched (${real}) — nothing to do.`)
     return
@@ -444,7 +719,7 @@ function main() {
     console.log('[patch-layout] --force: re-patching from the current file. Consider restoring the .orig backup first.')
   }
 
-  const trials = VARIANTS.map((variant) => ({ id: variant.id, ...applyReplacements(original, variant.replacements) }))
+  const trials = VARIANTS.map((variant) => ({ ...variant, ...applyReplacements(original, variant.replacements) }))
   const chosen = trials.find((trial) => trial.failures.length === 0)
   if (!chosen) {
     console.error('[patch-layout] ABORTED — the bundle matches no known build variant:')
@@ -465,7 +740,7 @@ function main() {
   // unpatched, promote it (the previous orig belongs to an older dsh and would
   // otherwise be restored over a newer install — a silent downgrade). Only a
   // pre-patch state that already carries our markers gets the timestamped bak.
-  const targetLooksPatched = PATCHED_MARKERS.some((marker) => original.includes(marker))
+  const targetLooksPatched = looksPatched(original)
   const hadPristine = existsSync(pristine)
   // The shared pristine backup backs --restore for the DEFAULT profile bundle.
   // With an explicit --target (testing / another machine's bundle) never touch
@@ -481,7 +756,7 @@ function main() {
     copyFileSync(real, join(BACKUP_DIR, `client.js.${stamp}.bak`))
   }
 
-  const missingMarkers = PATCHED_MARKERS.filter((marker) => !chosen.patched.includes(marker))
+  const missingMarkers = (chosen.markers ?? PATCHED_MARKERS).filter((marker) => !chosen.patched.includes(marker))
   if (missingMarkers.length > 0) {
     console.error('[patch-layout] verification failed — missing markers:')
     for (const marker of missingMarkers) console.error(`  - ${marker}`)

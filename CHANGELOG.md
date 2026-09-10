@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.0.24] - 2026-09-10
+
+### Fixed
+
+- **raw 图片路由与 SSE 路由补齐鉴权 fence**：此前仅文件 RPC 通道经
+  `ctx.connection.requestRejection` 做 Host/Origin + 浏览器鉴权检查，raw 图片
+  （`/dsh-plugin-files/raw/<path>`）与 SSE 事件（`/dsh-plugin-files/events`）
+  两条路由缺失；现三条路由统一过 connection 层鉴权 fence，行为一致
+  （三者均不在 dsh 0.1.2+ token 墙覆盖范围内，故各自自带校验）。
+- **FSWatcher 增加 `error` 监听**：被监视目录被删除 / 受权限限制时，降级清理该
+  目录的监视状态并允许后续自动重试，不再可能因未捕获异常崩掉 dsh 进程。
+- **启动路径布局补丁检查异步化**：补丁检测不再阻塞插件启动路径。
+- **package.json `files` 收紧 `lib/` 产物**为 `lib/index.js` / `lib/client.js` /
+  `lib/client.js.map` 三个文件，不再携带 lib 下其它多余产物。
+
+## [0.0.23] - 2026-09-10
+
+### Fixed
+
+- **适配 DSH 0.1.5-rc.1（cordis 4.0.2）：启动即崩 "cannot get property "webServer"
+  without inject"**。根因：文件通道此前经 `ctx.connection.rpc.handle()` 注册，该 API
+  内部在 **connection 服务自己的上下文**上开 effect 访问 `owner.webServer`——cordis
+  4.0.2 的服务解析下，connection 服务宿主上下文的 fiber 链上看不到 webServer 服务
+  （0.1.5 官方树里没有任何第一方调用方走这条路径：dsh-api-gateway 用 `rpc.intercept`，
+  dsh-client-connection 自己也只通过 `ctx.inject(["webServer"], …)` 授权分支访问），
+  apply 一进通道注册就抛错，整个 profile 加载失败、dsh 进程退出。修复：不再依赖
+  `rpc.handle`，改为在本插件自身（webServer 已授予 inject）的上下文直接
+  `ctx.webServer.register` 前缀路由，内置与 `connection.rpc.call` 完全一致的线上协议
+  （POST `CHANNEL/endpoint`、`client-request`/`server-response` 信封、404/415/400/413/
+  500 状态语义、Host/Origin + 浏览器鉴权围栏经 `connection.requestRejection` 对齐），
+  客户端零改动。已用 token-cookie 实测：list 返回真实目录树。
+- **布局补丁针对 0.1.5 的 rightbar 框架整体重写**（`patch-layout.mjs` 新增 `npm-015`
+  变体）：0.1.5 的 ui-layout 把 details 列重构为通用 rightbar 面板系统
+  （`RightbarColumn`、track/fullscreen 状态机、keyed `main` 槽），旧 details 列锚点
+  全部失配。新变体在 sidebar 与 center 之间重加 explorer 列：`computeColumns` 预算
+  explorer 轨道、store/LayoutController 增 `setExplorer`/`setExplorerOccupied`、
+  占位同步 effect、槽位声明与拖拽把手；显式打开 rightbar 面板时 explorer 自动让位
+  （0.0.21 细节列优先规则的延续）。标记表按补丁代际拆分（`PATCHED_MARKERS` /
+  `PATCHED_MARKERS_015`），新旧 dsh 版本均可检测与自动重打。
+- **修复首版 0.1.5 补丁的作用域错误**（浏览器端 "layout is not defined"、
+  ui-layout 整体加载失败）：占位同步 effect 引用的 `layout` 在 0.1.5 声明于
+  service+root registration effect 回调内部（0.1.2 时在 apply 层级），已把该 effect
+  移入 registration effect 作用域内。
+- **修复预览面板霸占整个中央列**（文件预览竖着堆在会话区上方、会话被挤到底部）：
+  0.1.5 变体拆分旧补丁的 `css.centerSplit` 替换时漏掉了 `flex-direction: column →
+  row` 的翻转，预览槽（CenterColumn 首个子元素）竖向堆叠占满全宽。已恢复行方向：
+  预览在左、会话 seat 在右并排。
+
 ## [0.0.22] - 2026-09-07
 
 ### Fixed

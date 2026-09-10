@@ -42,7 +42,8 @@
   md 默认渲染预览（源码/渲染一键切换），.txt 等散文格式与超大代码文件
   自动降级为纯文本编辑，加载快、不卡界面
 - **磁盘变更同步**：打开的文件被外部修改（如 agent 或其它编辑器保存）时，
-  干净标签页自动重读，带未保存编辑的标签页显示「⟳」徽标（点击重新加载）
+  干净标签页自动重读，带未保存编辑的标签页显示「⟳」徽标（点击重新加载）；
+  监视目录被删 / 受限时自动降级清理并允许重试，不会因 watcher 异常影响宿主进程
 - **行号栏**：编辑器左侧逻辑行号，与文本滚动锁定对齐（纯文本/高亮模式均生效）
 - **图片预览**：png/jpg/gif/webp/avif/svg 等直接内联渲染（同源字节路由，20MB 上限）
 - **右键菜单**（VS Code 风格）：文件/文件夹/**整列任意空白、头部**均可右键——
@@ -144,7 +145,9 @@ node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs --restore
 ## 说明
 
 - `/dsh-plugin-files` RPC 通道仅限 loopback；写操作显式以 `danger-full-access` 执行；
-  右键菜单的新建/重命名/删除同样经该通道（loopback 信任，与编辑器保存一致）
+  右键菜单的新建/重命名/删除同样经该通道（loopback 信任，与编辑器保存一致）；
+  本插件挂载的全部 HTTP 路由（RPC / raw 图片 / SSE）统一经过连接层鉴权 fence
+  （`connection.requestRejection`，Host/Origin + 浏览器鉴权检查）
 - 图片预览走同源路由 `/dsh-plugin-files/raw/<path>`：仅响应图片扩展名，
   先经 `ctx.fs.resolve → stat`（沙箱一致的路径解析）再读取字节，20MB 上限
 - DSH 升级会覆盖布局 bundle；0.0.9 起插件启动时自动检测并重打补丁，
@@ -160,11 +163,23 @@ node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs --restore
 
 ## 兼容性
 
-- 实测于 DSH `0.1.2-rc.1`（0.0.16 起布局补丁锚点适配该版：detailsCol 边框样式
+- 实测于 DSH `0.1.5-rc.1`（0.0.23 起文件通道改为本插件自挂路由，适配该版 cordis 4.0.2
+  的服务解析——旧版经 `connection.rpc.handle` 注册会启动即崩）与 DSH `0.1.2-rc.1`
+  （0.0.16 起布局补丁锚点适配该版：detailsCol 边框样式
   `1px/--dsw-alias-border-l2` → `.5px/--dsw-alias-border-l3`、DetailsColumn 的
   children 新增 `SessionProvider` 包裹）；0.1.1-rc.2 及更早版本用 0.0.15 的锚点表。
 - 0.0.9 起插件启动时自动检测并重打布局补丁，DSH 升级后通常无需手动操作；
   锚点失配会在启动日志提示 `ui-layout patch exited 1`，此时升级本插件即可。
+
+## 依赖的非公开宿主 API
+
+本插件依赖若干 dsh 内部（非公开、无稳定兼容性承诺）的宿主 API。dsh 升级时请重点回归以下依赖点。**适用 dsh 版本：`0.1.5-rc.1`**（同系 0.1.2-rc.1 亦实测兼容）：
+
+| 依赖的非公开 API | 用途 | 位置 |
+|---|---|---|
+| `connection.rpc.call` wire 协议 | 文件 RPC 通道复用 web 客户端 `connection.rpc.call` 的线上协议：POST `/dsh-plugin-files/<endpoint>`，body `{ type: 'client-request', rpcId, method, payload }`，应答 `{ type: 'server-response', rpcId, result }`，仅接受 HTTP 200；非 200 表现为 transport failure | `src/index.ts` `serveFilesRpc` |
+| `ctx.connection.requestRejection(req)` | 与 connection 服务自挂通道相同的 Host/Origin + 浏览器鉴权 fence（401/403）；文件 RPC、raw 图片与 SSE 三条路由均过此检查 | `src/index.ts` 三处 `webServer.register` handler |
+| ui-layout bundle patch 锚点 | 资源管理器列由 `scripts/patch-layout.mjs` 向编译后的 `@deepseek-ai/dsh-client-ui-layout` client bundle 注入标记（`npm-015` 变体对应 0.1.5 rightbar 框架，如 `"explorerCol": "pI_x6G_explorerCol"`、`explorerOccupied`、`data-explorer-collapsed` 等，见 `src/index.ts` `LAYOUT_PATCH_MARKERS_015`）；dsh 升级覆盖 bundle 后由宿主自动重打，锚点失配时补丁脚本安全退出不写文件 | `scripts/patch-layout.mjs`、`src/index.ts` |
 
 ## 相关插件
 
@@ -178,8 +193,9 @@ node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs --restore
 | [dsh-plugin-image-tools](https://www.npmjs.com/package/dsh-plugin-image-tools) | [GitHub 仓库](https://github.com/Pasumao/dsh-plugin-image-tools) | 图片选择卡 + 回复内嵌图片 + 盲模型收图 |
 | [dsh-plugin-table-zoom](https://www.npmjs.com/package/dsh-plugin-table-zoom) | [GitHub 仓库](https://github.com/Pasumao/dsh-plugin-table-zoom) | 聊天长表格浮窗查看 + 一键复制 Markdown |
 | [dsh-plugin-windows-guard](https://www.npmjs.com/package/dsh-plugin-windows-guard) | [GitHub 仓库](https://github.com/Pasumao/dsh-plugin-windows-guard) | Windows 环境防坑：守则技能 + 乱码检测 / 危险写拦截 / 编码诊断修复 |
-
 | [dsh-plugin-context-trim](https://www.npmjs.com/package/dsh-plugin-context-trim) | [GitHub 仓库](https://github.com/Pasumao/dsh-plugin-context-trim) | 会话注入门控：skill / tool / 提示词段落按会话裁剪 |
+| [dsh-plugin-workbench](https://www.npmjs.com/package/dsh-plugin-workbench) | [GitHub 仓库](https://github.com/Pasumao/dsh-plugin-workbench) | 本插件：VS Code 风格工作区文件树 + 可编辑预览，网页变轻量代码编辑器 |
+
 > 本系列其余插件见 [Pasumao · dsh 插件](https://github.com/Pasumao)；觉得好用欢迎到 GitHub 点 ⭐。
 
 ## AI 生成声明
