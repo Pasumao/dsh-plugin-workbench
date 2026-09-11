@@ -13,6 +13,30 @@
 
 [中文](./README.md) | **English**
 
+> ## ⛔ This plugin is no longer maintained (2026-09-11)
+>
+> **As of DSH `0.1.5`, the official build ships a workspace file tree and document
+> preview out of the box** (built-in bundles
+> `@deepseek-ai/dsh-client-ui-sidebar-files`: right-sidebar file tree with lazy
+> directory listing; `@deepseek-ai/dsh-client-ui-sidebar-documentpreview`:
+> Markdown / highlighted code / image / PDF / HTML / plain-text previews), which
+> covers this plugin's core capabilities as a first-party implementation — no
+> layout patch, no reliance on unofficial host APIs, upgraded automatically with
+> dsh. This plugin is therefore **discontinued**: no further maintenance or
+> releases. Existing users are advised to uninstall it and use the built-in
+> features:
+>
+> ```powershell
+> dsh plugin --profile web remove dsh-plugin-workbench
+> # Optional: restore the layout bundle to the pristine official version
+> node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs --restore
+> # Restart dsh web to take effect
+> ```
+>
+> Published versions remain installable (tested against DSH `0.1.5-rc.1`), but
+> bugs will not be fixed and newer dsh versions will not be adapted. Thanks to
+> every user and every star ⭐.
+
 **A VS Code-style workbench that edits files directly** — not a read-only preview: file tree + editable code preview
 (syntax highlighting, tabs, line-number gutter) + right-click file operations (new / rename / delete / copy / cut /
 paste / open in system / reveal in file explorer) + inline image preview, with state saved independently per workspace.

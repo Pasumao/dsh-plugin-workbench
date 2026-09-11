@@ -13,6 +13,25 @@
 
 [**中文**](./README.md) | [English](./README.en.md)
 
+> ## ⛔ 本插件已停止更新（2026-09-11）
+>
+> **DSH `0.1.5` 起官方自带工作区文件树与文档预览**（内置 bundle
+> `@deepseek-ai/dsh-client-ui-sidebar-files`：右侧栏文件树，懒加载目录列表；
+> `@deepseek-ai/dsh-client-ui-sidebar-documentpreview`：Markdown / 高亮代码 /
+> 图片 / PDF / HTML / 纯文本预览），覆盖本插件的核心能力，且为官方第一方实现
+> （无需布局补丁、不依赖任何非公开宿主 API、随 dsh 自动升级）。
+> 本插件因此**停止维护与更新**，已安装用户建议卸载并改用内置功能：
+>
+> ```powershell
+> dsh plugin --profile web remove dsh-plugin-workbench
+> # 可选：把布局 bundle 还原为官方原始版本
+> node node_modules/dsh-plugin-workbench/scripts/patch-layout.mjs --restore
+> # 重启 dsh web 生效
+> ```
+>
+> 已发布的版本仍可安装使用（实测兼容 DSH `0.1.5-rc.1`），但不再修复问题、
+> 不再适配后续 dsh 版本。感谢每一位用户与 star ⭐。
+
 **能直接改文件的 VS Code 风格工作台**——不是只读预览：文件树 + 可编辑代码预览
 （语法高亮、标签页、行号栏）+ 右键文件操作（新建 / 重命名 / 删除 / 复制 / 剪切 /
 粘贴 / 在系统中打开 / 在资源管理器打开）+ 图片内联预览，每个工作区独立保存状态。

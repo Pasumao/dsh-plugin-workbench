@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.0.25] - 2026-09-11
+
+### Deprecated
+
+- **停止更新（End of life）**：DSH `0.1.5` 起官方自带工作区文件树与文档预览
+  （内置 bundle `@deepseek-ai/dsh-client-ui-sidebar-files` +
+  `@deepseek-ai/dsh-client-ui-sidebar-documentpreview`，右侧栏文件树 +
+  Markdown / 高亮代码 / 图片 / PDF / HTML / 纯文本预览），覆盖本插件核心能力
+  且为第一方实现（无布局补丁、无非公开 API 依赖、随 dsh 自动升级）。
+  本插件停止维护，README 顶部与 npm deprecate 提示均已注明迁移方式
+  （卸载 + `patch-layout.mjs --restore` 还原布局 bundle）。已发布版本仍可安装
+  （实测兼容 0.1.5-rc.1），但不再修复问题、不再适配后续 dsh 版本。
+
 ## [0.0.24] - 2026-09-10
 
 ### Fixed

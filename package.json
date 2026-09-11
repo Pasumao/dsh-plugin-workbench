@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-workbench",
-  "description": "VS Code-style workspace file explorer for the DeepSeek Harness web GUI — editable preview with syntax highlighting, tabs and line numbers, full right-click file operations (create / rename / delete / copy / cut / paste / reveal in file manager), inline image & markdown preview, @-mention files into chat, drag files into the composer, per-workspace state with undo. Turns the dsh web page into a lightweight code editor.",
-  "version": "0.0.24",
+  "description": "[DISCONTINUED 2026-09-11: DSH >=0.1.5 ships a built-in workspace file tree + document preview (dsh-client-ui-sidebar-files / sidebar-documentpreview); please uninstall and use the built-in features] VS Code-style workspace file explorer for the DeepSeek Harness web GUI — editable preview with syntax highlighting, tabs and line numbers, full right-click file operations (create / rename / delete / copy / cut / paste / reveal in file manager), inline image & markdown preview, @-mention files into chat, drag files into the composer, per-workspace state with undo. Turns the dsh web page into a lightweight code editor.",
+  "version": "0.0.25",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
   "engines": {
